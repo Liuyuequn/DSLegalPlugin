@@ -8,6 +8,7 @@
  *   三条线索（日程 / 待办 / 项目）都在本地切片，切换线索不再发请求、不会闪。
  * - `/dslegal/agenda` —— 单个项目的明细，用于项目详情里的格式异常清单。
  * - `/dslegal/edit` —— 全部写入；`target: { line, title }` 的校验语义由 host 保证。
+ * - `/dslegal/open` —— 用系统默认程序打开某条目所在的工作日志（host 侧起进程）。
  */
 
 import { PRIORITY_COLORS, type Priority, type PriorityColorIssue, type PriorityColorOverrides } from '@dslegal/core'
@@ -237,3 +238,57 @@ export const getAgenda = (project: string, topLevelDir?: string): Promise<Agenda
       topLevelDir === undefined ? '' : `&topLevelDir=${encodeURIComponent(topLevelDir)}`
     }`,
   )
+
+/** 「打开原始 markdown」的结果（`/dslegal/open`）。 */
+export interface OpenSourceResult {
+  /** 实际被打开的工作日志**绝对路径**——由 host 决定，界面从不传路径给它。 */
+  readonly path: string
+  readonly project: string
+  readonly topLevelDir: string
+  readonly kind: 'todo' | 'schedule'
+  readonly line: number
+  /** 该行确实是一条已解析的条目；`false` 表示文件已被外部改过、行号可能不准。 */
+  readonly exact: boolean
+  /** 是否真的起了进程。演练模式下为 `false`。 */
+  readonly launched: boolean
+  readonly dryRun: boolean
+  /** 用来打开的关联程序名（如 `VS Code`）。 */
+  readonly app: string
+  /** 关联程序能不能跳到指定行；`false` 时界面必须如实说明"没有跳过去"。 */
+  readonly lineCapable: boolean
+  /** 只有演练模式才回传：打算执行的命令与参数（排查用）。 */
+  readonly command?: string
+  readonly args?: readonly string[]
+}
+
+/**
+ * 请 host 用系统默认程序打开该条目所在的工作日志。
+ *
+ * **只送"哪个项目的第几行"，不送路径**：一个能打开任意文件的接口，等于把本机程序
+ * 启动权交给页面里任何一段脚本。路径解析全在 host 侧（它本来就知道数据根目录）。
+ */
+export async function postOpenSource(input: {
+  readonly project: string
+  readonly topLevelDir?: string
+  readonly kind: 'todo' | 'schedule'
+  readonly line: number
+}): Promise<OpenSourceResult> {
+  const response = await fetch('/dslegal/open', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+  // 旧 host 没有这条路由，返回的是 JSON 404 或 HTML——不能直接 `.json()`（会抛语法错误）。
+  const text = await response.text()
+  let payload: { error?: string } & Partial<OpenSourceResult> = {}
+  try {
+    payload = JSON.parse(text) as typeof payload
+  } catch {
+    payload = {}
+  }
+  if (!response.ok || payload.error !== undefined) {
+    const hint = response.status === 404 ? '（host 插件未加载该接口，请重启 DSH）' : ''
+    throw new Error(payload.error ?? `打开失败：HTTP ${response.status}${hint}`)
+  }
+  return payload as OpenSourceResult
+}

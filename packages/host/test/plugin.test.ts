@@ -477,6 +477,110 @@ describe('HTTP 接口', () => {
   })
 })
 
+/**
+ * 「点日程标题 → 打开原始 markdown」。
+ *
+ * 整段用 `DSLEGAL_OPEN_DRY=1` 跑：真实的"打开"会在开发机上弹出编辑器，而这里要验的是
+ * **解析出的路径、行号、命令**。目标文件长什么样，由 `opener.test.ts` 用纯函数覆盖。
+ */
+describe('POST /dslegal/open（打开原始 markdown）', () => {
+  const workLogPath = (): string =>
+    join(root, '诉讼案件', '张三诉李四', COLLAB_DIR, WORK_LOG_FILE)
+
+  let previous: string | undefined
+
+  beforeEach(() => {
+    previous = process.env.DSLEGAL_OPEN_DRY
+    process.env.DSLEGAL_OPEN_DRY = '1'
+  })
+
+  afterEach(() => {
+    if (previous === undefined) delete process.env.DSLEGAL_OPEN_DRY
+    else process.env.DSLEGAL_OPEN_DRY = previous
+  })
+
+  it('按 project + line 解析出**真实工作日志**并带出行号', async () => {
+    const agenda = await harness.request('GET', '/dslegal/agenda?project=张三诉李四')
+    const row = agenda.body.schedule[0] as { line: number; title: string }
+
+    const { status, body } = await harness.request('POST', '/dslegal/open', {
+      project: '张三诉李四',
+      topLevelDir: '诉讼案件',
+      kind: 'schedule',
+      line: row.line,
+    })
+
+    expect(status).toBe(200)
+    expect(body.path).toBe(workLogPath())
+    expect(body.line).toBe(row.line)
+    expect(body.exact).toBe(true)
+    expect(body.dryRun).toBe(true)
+    expect(body.launched).toBe(false)
+    // 演练模式下要能看见"打算执行什么"（真实模式不回传命令行）。
+    expect(body.args.some((arg: string) => arg.includes(workLogPath()))).toBe(true)
+  })
+
+  it('**不接受调用方给的路径**：多传一个 path 也不会被用来启动程序', async () => {
+    const agenda = await harness.request('GET', '/dslegal/agenda?project=张三诉李四')
+    const row = agenda.body.schedule[0] as { line: number }
+
+    const { status, body } = await harness.request('POST', '/dslegal/open', {
+      project: '张三诉李四',
+      line: row.line,
+      path: 'C:\\Windows\\System32\\calc.exe',
+    })
+
+    expect(status).toBe(200)
+    expect(body.path).toBe(workLogPath())
+    const argv = (body.args as string[]).join('\u0000')
+    expect(argv).not.toContain('calc.exe')
+  })
+
+  it('待办也用同一个接口（kind 只是用来判 exact）', async () => {
+    const agenda = await harness.request('GET', '/dslegal/agenda?project=张三诉李四')
+    const todo = agenda.body.todos[0] as { line: number }
+
+    const { status, body } = await harness.request('POST', '/dslegal/open', {
+      project: '张三诉李四',
+      kind: 'todo',
+      line: todo.line,
+    })
+    expect(status).toBe(200)
+    expect(body.kind).toBe('todo')
+    expect(body.exact).toBe(true)
+  })
+
+  it('行号对不上（文件被外部改过）时**照样打开**，只是如实回报 exact=false', async () => {
+    const { status, body } = await harness.request('POST', '/dslegal/open', {
+      project: '张三诉李四',
+      line: 999,
+    })
+    expect(status).toBe(200)
+    expect(body.exact).toBe(false)
+    expect(body.path).toBe(workLogPath())
+  })
+
+  it('缺少 / 非法的入参一律 400，并给可读的话', async () => {
+    const noProject = await harness.request('POST', '/dslegal/open', { line: 10 })
+    expect(noProject.status).toBe(400)
+    expect(noProject.body.error).toContain('project')
+
+    const badLine = await harness.request('POST', '/dslegal/open', {
+      project: '张三诉李四',
+      line: 0,
+    })
+    expect(badLine.status).toBe(400)
+    expect(badLine.body.error).toContain('line')
+
+    const unknown = await harness.request('POST', '/dslegal/open', {
+      project: '查无此案',
+      line: 10,
+    })
+    expect(unknown.status).toBe(400)
+    expect(unknown.body.error).toContain('未找到项目')
+  })
+})
+
 describe('未设定数据目录', () => {
   let bare: Harness
   let bareRoot = ''

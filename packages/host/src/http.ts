@@ -390,6 +390,51 @@ async function buildOverview(deps: LegalDeps, now: Date): Promise<Record<string,
   }
 }
 
+/**
+ * 「点日程标题 → 打开原始 markdown」。
+ *
+ * 三条刻意的地方：
+ *
+ * 1. **路径只由 host 决定**。请求体里给的是"哪个项目、第几行"，绝不是文件路径——
+ *    一个能打开任意文件的接口，等于把本机程序启动权交给页面里任何一段脚本。
+ * 2. **文件变了也照样打开**，只是如实回报 `exact: false`。用户点它就是想看原文件，
+ *    因为"行号对不上"而拒绝打开，属于把守卫用在了不该用的地方（对比：写入必须拒绝）。
+ * 3. **只有演练模式才回传命令行**。它含本机 exe 绝对路径，界面用不上；
+ *    但 dry-run 是自动化测试唯一的观测点，所以那一种情况下必须给出来。
+ */
+async function openWorkLog(
+  deps: LegalDeps,
+  body: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const project = text(body, 'project')
+  if (project === undefined || project.length === 0) throw new Error('缺少 project。')
+  const line = body.line
+  if (typeof line !== 'number' || !Number.isInteger(line) || line < 1) {
+    throw new Error('line 必须是正整数。')
+  }
+
+  const location = await requireProject(deps, project, text(body, 'topLevelDir'))
+  const snapshot = await deps.readWorkLog(location.workLogPath)
+  const kind = text(body, 'kind') === 'todo' ? 'todo' : 'schedule'
+  const section = kind === 'todo' ? snapshot.result.todo : snapshot.result.schedule
+  const exact = section.items.some((candidate) => candidate.line === line)
+
+  const outcome = await deps.openWorkLog(location.workLogPath, line)
+  return {
+    path: location.workLogPath,
+    project: location.project,
+    topLevelDir: location.topLevelDir,
+    kind,
+    line,
+    exact,
+    launched: outcome.launched,
+    dryRun: outcome.dryRun,
+    app: outcome.app,
+    lineCapable: outcome.lineCapable,
+    ...(outcome.dryRun ? { command: outcome.command, args: [...outcome.args] } : {}),
+  }
+}
+
 /** 注册 `/dslegal/*` 路由；返回 disposer。 */
 export function registerHttpRoutes(webServer: WebServerLike, deps: LegalDeps): () => void {
   return webServer.register({
@@ -459,6 +504,12 @@ export function registerHttpRoutes(webServer: WebServerLike, deps: LegalDeps): (
         if (req.method === 'POST' && path === `${HTTP_PREFIX}/edit`) {
           const body = await readJsonBody(req)
           sendJson(res, 200, await applyEdit(deps, body))
+          return
+        }
+
+        if (req.method === 'POST' && path === `${HTTP_PREFIX}/open`) {
+          const body = await readJsonBody(req)
+          sendJson(res, 200, await openWorkLog(deps, body))
           return
         }
 

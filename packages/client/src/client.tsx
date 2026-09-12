@@ -35,6 +35,7 @@ import {
   getSettings,
   HOST_OUTDATED_COLORS,
   postEdit,
+  postOpenSource,
   postSettings,
   type Agenda,
   type Overview,
@@ -62,6 +63,7 @@ import {
   composeEditBody,
   composeError as validateCompose,
   defaultComposeProject,
+  openSourceMessage,
   todayKey,
   type ComposeDraft,
   type ComposeRequest,
@@ -692,6 +694,30 @@ function Workbench(): JSX.Element {
   }, [])
 
   /**
+   * 「点日程标题 → 打开原始 markdown」。
+   *
+   * 三件事：
+   *
+   * 1. **只送 project + line**，路径由 host 解析（它才知道数据根目录；界面能传路径的话，
+   *    这个接口就成了"启动任意本机程序"的后门）。
+   * 2. **窗不关**：打开的是外部编辑器，用户回来大概率还要接着看这条日程（或改状态）。
+   * 3. **结果如实报**：跳行没跳成、文件已被外部改过，都要在横幅里说出来。
+   */
+  const openSource = useCallback(async (row: ScheduleRow) => {
+    try {
+      const result = await postOpenSource({
+        project: row.project,
+        topLevelDir: row.topLevelDir,
+        kind: 'schedule',
+        line: row.line,
+      })
+      setBanner(openSourceMessage(result))
+    } catch (cause) {
+      setBanner({ kind: 'warn', text: messageOf(cause) })
+    }
+  }, [])
+
+  /**
    * 点在空白处 → 开新建窗。
    *
    * 两件事在这里定下来：
@@ -964,7 +990,7 @@ function Workbench(): JSX.Element {
           </header>
 
           {banner !== null ? (
-            <div style={UI.banner(banner.kind)} role="status">
+            <div data-fl="banner" data-fl-kind={banner.kind} style={UI.banner(banner.kind)} role="status">
               <span style={{ flex: 1 }}>{banner.text}</span>
               <button
                 type="button"
@@ -1053,6 +1079,7 @@ function Workbench(): JSX.Element {
               hover={hover}
               setHover={setHover}
               onToggle={() => void toggleSchedule(detailRow)}
+              onOpenSource={() => void openSource(detailRow)}
             />
           )}
 

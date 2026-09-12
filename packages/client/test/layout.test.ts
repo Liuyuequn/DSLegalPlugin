@@ -392,6 +392,7 @@ describe('用在 <button> 上的样式必须把边框说全（UA 是 2px outset�
     primaryButton: () => primaryButton(false, false),
     monthChip: () => monthChip('#E53E3E', false, false),
     popoverAction: () => popoverAction(false, false),
+    popoverTitleButton: () => UI.popoverTitleButton(false),
     composeChip: () => UI.composeChip(false, false, '#E53E3E'),
     composeSubmit: () => UI.composeSubmit(false, false),
     composeProjectTrigger: () => UI.composeProjectTrigger(false, false),
@@ -525,6 +526,69 @@ describe('点击粒度：周 / 月都走"点条目 → 弹明细"', () => {
     const body = bodyOf('SchedulePopover')
     expect(body).toContain('data-fl="popover-toggle"')
     expect(body).toContain('onToggle')
+  })
+
+  it('明细窗的标题是"打开原始 markdown"的入口', () => {
+    const body = bodyOf('SchedulePopover')
+    expect(body, '标题要能点开原始 markdown').toContain('data-fl="popover-source"')
+    expect(body, '点了标题要真的发请求，而不是只改个样式').toContain('onOpenSource')
+    expect(body, '标题按钮要用登记过的样式（它有 UA 边框与 UA 字号两个坑）').toContain(
+      'UI.popoverTitleButton',
+    )
+  })
+})
+
+/**
+ * 「点日程标题 → 用系统默认程序打开工作日志」。
+ *
+ * 这条链路上最容易犯的错是**把路径从界面传下去**：一旦接口接受调用方给的路径，
+ * 它就从"打开我的工作日志"变成"启动本机任意程序"，而页面里任何一段脚本都能调它。
+ * 所以路径只能由 host 从"项目名"解析出来——下面两条断言从源码层面钉住这一点。
+ */
+describe('打开原始 markdown：只送项目与行号，不送路径', () => {
+  const API = readFileSync(new URL('../src/api.ts', import.meta.url), 'utf8')
+  const CLIENT = readFileSync(new URL('../src/client.tsx', import.meta.url), 'utf8')
+
+  /** 抠出 `postOpenSource` 的函数体。 */
+  const openBody = (): string => {
+    const start = API.indexOf('export async function postOpenSource(')
+    expect(start, '找不到 postOpenSource，说明结构变了，请同步这个守卫').toBeGreaterThan(-1)
+    const rest = API.slice(start)
+    const end = rest.indexOf('\n}')
+    return end < 0 ? rest : rest.slice(0, end)
+  }
+
+  it('请求体只带 project / topLevelDir / kind / line', () => {
+    const body = openBody()
+    for (const field of ['project', 'topLevelDir', 'kind', 'line']) {
+      expect(body, `请求体应当带上 ${field}`).toContain(field)
+    }
+    expect(body, '**绝不接受调用方给的路径**：能开任意文件的接口等于启动任意程序的后门').not.toMatch(
+      /\bpath\b/,
+    )
+  })
+
+  it('编排层调用时也只给项目与行号', () => {
+    const start = CLIENT.indexOf('const openSource = useCallback(')
+    expect(start, '找不到 openSource，说明结构变了，请同步这个守卫').toBeGreaterThan(-1)
+    const rest = CLIENT.slice(start)
+    const end = rest.indexOf('\n  }, [')
+    const body = end < 0 ? rest : rest.slice(0, end)
+    expect(body).toContain('postOpenSource')
+    expect(body, '要按 identity 送行号').toContain('line: row.line')
+    expect(body, '不许把路径塞进请求').not.toMatch(/\bpath\b/)
+  })
+
+  it('不借浏览器的手开文件（打开本机文件只能走 host）', () => {
+    const body = ((): string => {
+      const views = readFileSync(new URL('../src/views.tsx', import.meta.url), 'utf8')
+      const start = views.indexOf('function SchedulePopover(')
+      const rest = views.slice(start + 1)
+      const end = rest.search(/\n(function |\/\*\*)/)
+      return end < 0 ? rest : rest.slice(0, end)
+    })()
+    expect(body, '不能写成 <a href>：那是浏览器导航，开不了本机文件').not.toContain('href')
+    expect(body, '不能借 window.open 打开本机文件').not.toContain('window.open')
   })
 })
 

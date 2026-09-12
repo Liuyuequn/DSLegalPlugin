@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { ScheduleRow, TodoRow } from '../src/api.js'
+import type { OpenSourceResult, ScheduleRow, TodoRow } from '../src/api.js'
 import {
   WEEKDAYS,
   addDays,
@@ -20,6 +20,7 @@ import {
   monthGrid,
   monthLabel,
   monthWeekCount,
+  openSourceMessage,
   parseDayKey,
   popoverPosition,
   quadrantBuckets,
@@ -753,6 +754,62 @@ describe('新建条目：校验与 host 用的是同一份规则', () => {
     expect(
       composeError(draft({ kind: 'schedule', startDate: '2026-09-12', startTime: '9:00' })),
     ).toContain('HH:mm')
+  })
+})
+
+/**
+ * 「点日程标题 → 打开原始 markdown」之后要报什么。
+ *
+ * 这里钉的不是文案好看，而是**三件必须说出口的事**：跳行没跳成、文件被外部改过、
+ * 根本没能打开。少说任何一件，用户都会得到一个错误的心智模型（"它跳过去了"）。
+ */
+describe('openSourceMessage：打开原文的结果怎么说', () => {
+  const result = (over: Partial<OpenSourceResult> = {}): OpenSourceResult => ({
+    path: 'L:\\数据\\诉讼案件\\甲诉乙\\0. 协作\\1. 工作日志.md',
+    project: '甲诉乙',
+    topLevelDir: '诉讼案件',
+    kind: 'schedule',
+    line: 42,
+    exact: true,
+    launched: true,
+    dryRun: false,
+    app: 'VS Code',
+    lineCapable: true,
+    ...over,
+  })
+
+  it('能跳行时就说跳到了哪一行', () => {
+    const message = openSourceMessage(result())
+    expect(message.kind).toBe('info')
+    expect(message.text).toContain('VS Code')
+    expect(message.text).toContain('第 42 行')
+  })
+
+  it('关联程序不支持跳行时**必须明说**，并把行号告诉用户', () => {
+    const message = openSourceMessage(result({ app: 'Typora', lineCapable: false }))
+    expect(message.kind).toBe('warn')
+    expect(message.text).toContain('不支持跳到指定行')
+    expect(message.text).toContain('第 42 行')
+  })
+
+  it('文件被外部改过（exact=false）要提示行号可能不准', () => {
+    expect(openSourceMessage(result({ exact: false })).text).toContain('行号可能不准')
+    expect(openSourceMessage(result()).text).not.toContain('行号可能不准')
+  })
+
+  it('没打开成 / 演练模式：不许说成"已打开"', () => {
+    const failed = openSourceMessage(result({ launched: false }))
+    expect(failed.kind).toBe('warn')
+    expect(failed.text).toContain('未能打开')
+
+    const dry = openSourceMessage(result({ launched: false, dryRun: true }))
+    expect(dry.text).toContain('演练')
+  })
+
+  it('横幅里不出现本机绝对路径（那是编辑器标题栏该干的事）', () => {
+    for (const over of [{}, { lineCapable: false }, { exact: false }, { launched: false, dryRun: true }]) {
+      expect(openSourceMessage(result(over)).text).not.toContain('L:\\')
+    }
   })
 })
 

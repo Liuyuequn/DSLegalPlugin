@@ -22,7 +22,7 @@ import {
   type Priority,
 } from '@dslegal/core'
 
-import type { ScheduleCore, TodoCore } from './api.js'
+import type { OpenSourceResult, ScheduleCore, TodoCore } from './api.js'
 
 // ---------------------------------------------------------------------------
 // 日期键运算（本地时区；数据契约中的日期不含时区，故一律用本地日历运算）
@@ -426,6 +426,40 @@ export function scheduleDetail(row: ScheduleCore & { readonly project: string })
     priority: row.priority ?? null,
     done: row.done,
     fields,
+  }
+}
+
+/**
+ * 「点日程标题 → 打开原始 markdown」之后要报什么。
+ *
+ * 写成纯函数是为了把**该说的话**和组件分开：这里的话术有几条硬规则，
+ * 每一条都对应一个真实会发生的状态，而不是随手拼字符串：
+ *
+ * 1. **跳行没跳成必须明说**。关联程序认不出（Typora 这类）时我们只能打开整个文件，
+ *    此时要告诉用户"行号没跳过去，日程在第 N 行"——不然他会在文件里白找。
+ * 2. **文件被外部改过要说**（`exact: false`）：行号是从上一次读取来的，可能已经偏了。
+ * 3. **不展示绝对路径**。横幅是给"我点了什么、发生了什么"用的，一串本机路径
+ *    既读不下去也没必要（真要找文件，编辑器标题栏里就是）。
+ */
+export function openSourceMessage(result: OpenSourceResult): {
+  readonly kind: 'info' | 'warn'
+  readonly text: string
+} {
+  const where = `第 ${result.line} 行`
+  const drift = result.exact ? '' : '（文件已改动，行号可能不准）'
+
+  if (result.dryRun) {
+    return { kind: 'warn', text: `演练模式：本应打开工作日志${where}${drift}` }
+  }
+  if (!result.launched) {
+    return { kind: 'warn', text: `未能打开工作日志${where}${drift}` }
+  }
+  if (result.lineCapable) {
+    return { kind: 'info', text: `已用 ${result.app} 打开工作日志${where}${drift}` }
+  }
+  return {
+    kind: 'warn',
+    text: `已用 ${result.app} 打开工作日志，但它不支持跳到指定行：日程在第 ${result.line} 行${drift}`,
   }
 }
 

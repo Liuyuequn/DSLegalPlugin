@@ -18,6 +18,7 @@ import { resolvePriorityColors, type ResolvedPriorityColors } from '@dslegal/cor
 import { Config, resolveTopLevelDirs, type HostConfig } from './config.js'
 import type { LegalDeps } from './deps.js'
 import { registerHttpRoutes, type WebServerLike } from './http.js'
+import { openInDefaultApp } from './opener.js'
 import {
   DATA_ROOT_UNSET,
   LegalSettingsSchema,
@@ -155,6 +156,9 @@ export function apply(ctx: Context, config: HostConfig): void {
       await settings.update(SETTINGS_NS, { priorityColors: resolved.colors })
       return { colors: resolved.colors, issues: resolved.issues }
     },
+    // 「点日程标题 → 打开原始 markdown」：认关联程序、按平台拼命令、起一个脱离 DSH 的
+    // 子进程（详见 opener.ts）。`DSLEGAL_OPEN_DRY=1` 时只解析不启动，供测试与排查使用。
+    openWorkLog: (path, line) => openInDefaultApp(path, line),
   }
 
   registerTools(ctx, deps)

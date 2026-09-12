@@ -729,6 +729,8 @@ export function SchedulePopover(props: {
   readonly hover: string | null
   readonly setHover: (key: string | null) => void
   readonly onToggle: () => void
+  /** 「点标题 → 用系统默认程序打开原始 markdown」（由编排层发请求并报结果）。 */
+  readonly onOpenSource: () => void
 }): JSX.Element {
   const detail = scheduleDetail(props.row)
   const ref = useRef<HTMLDivElement | null>(null)
@@ -747,6 +749,7 @@ export function SchedulePopover(props: {
   })
 
   const toggleKey = 'popover-toggle'
+  const sourceKey = 'popover-source'
 
   return (
     <div
@@ -770,7 +773,27 @@ export function SchedulePopover(props: {
         </span>
       </span>
 
-      <span style={UI.popoverTitle}>{detail.title}</span>
+      {/* **标题就是"打开原始 markdown"的入口**（用户指定的手势）：点它用系统默认程序
+          打开这条日程所在的工作日志，并尽量跳到第 `line` 行。做成标题本身、而不是旁边
+          再加一个按钮——一个浮层里两个按钮，用户得先想"我该点哪个"。
+          右侧那个 `↗` 是唯一的提示：不加它，谁也不会想到标题能点。 */}
+      <span style={UI.popoverTitleRow}>
+        <button
+          type="button"
+          data-fl="popover-source"
+          data-fl-line={props.row.line}
+          style={UI.popoverTitleButton(props.hover === sourceKey)}
+          aria-label={`用系统默认程序打开这份工作日志（第 ${props.row.line} 行）：${detail.title}`}
+          title={`用系统默认程序打开工作日志，并定位到第 ${props.row.line} 行`}
+          {...hoverProps(sourceKey, props)}
+          onClick={props.onOpenSource}
+        >
+          {detail.title}
+        </button>
+        <span style={UI.popoverSourceMark} aria-hidden="true">
+          ↗
+        </span>
+      </span>
 
       <span style={UI.popoverFields}>
         {detail.fields.map((field) => (

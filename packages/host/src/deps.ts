@@ -13,6 +13,7 @@ import type {
 } from '@dslegal/core'
 import type { JsonValue } from '@deepseek-ai/dsh-tools'
 
+import type { OpenOutcome } from './opener.js'
 import type { WorkLogSnapshot } from './store.js'
 import { findProject, isAmbiguous, type ProjectLocation, type ScanResult } from './workspace.js'
 
@@ -67,6 +68,13 @@ export interface LegalDeps {
   readonly getPriorityColors: () => ResolvedPriorityColors
   /** 保存优先级颜色（写入用户设置），返回落盘后生效的值。 */
   readonly setPriorityColors: (input: PriorityColorOverrides) => Promise<PriorityColorsUpdate>
+  /**
+   * 用系统默认程序打开一份工作日志，并尽量把光标定位到第 `line` 行（1-based）。
+   *
+   * 做成依赖而不是在接口层直接 import：单测要能注入一个假的"打开器"，否则每跑一次
+   * 测试就会在开发机上真的弹一个编辑器出来。
+   */
+  readonly openWorkLog: (path: string, line: number) => Promise<OpenOutcome>
 }
 
 /** 定位项目；找不到或重名时抛出可读错误。 */

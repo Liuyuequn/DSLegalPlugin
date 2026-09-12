@@ -1829,13 +1829,51 @@ export const popoverPriority: CSSProperties = {
   fontWeight: 500,
 }
 
-export const popoverTitle: CSSProperties = {
-  ...FONT.body,
-  fontWeight: 600,
-  color: T.labelPrimary,
-  lineHeight: 1.45,
-  // 标题可能很长：允许折行，但不允许顶破 260px。
-  overflowWrap: 'anywhere',
+/**
+ * 明细窗里那个**可点的标题**：点它用系统默认程序打开这条日程所在的原始 markdown。
+ *
+ * 做成标题本身而不是旁边加个「打开原文」按钮，是用户明确要的手势——"通过点击日程标题
+ * 的方式打开"。所以它必须长得**像标题、又看得出能点**：平时就是标题的样子（不加下划线、
+ * 不染主色，否则明细窗里最显眼的元素会变成"一个链接"），悬停才出现下划线 + 主色。
+ *
+ * 三条必须显式写死的：`border` 四条边（它是 `<button>`，UA 的 2px outset 会漏出来）、
+ * `fontSize`（UA 默认 13.33px 会漏进来）、`padding: 0` + `textAlign: 'left'`
+ * （按钮的 UA 内边距与居中会让标题错位）。
+ */
+export function popoverTitleButton(hovered: boolean): CSSProperties {
+  return {
+    display: 'block',
+    width: '100%',
+    padding: 0,
+    margin: 0,
+    border: 'none',
+    background: 'transparent',
+    fontFamily: 'inherit',
+    fontSize: FS.base,
+    fontWeight: 600,
+    lineHeight: 1.45,
+    textAlign: 'left',
+    color: hovered ? T.brand : T.labelPrimary,
+    textDecoration: hovered ? 'underline' : 'none',
+    textUnderlineOffset: 3,
+    cursor: 'pointer',
+    overflowWrap: 'anywhere',
+    transition: TRANSITION,
+  }
+}
+
+/** 明细窗标题右侧那个 `↗`：告诉用户"这里通向文件"。 */
+export const popoverSourceMark: CSSProperties = {
+  ...FONT.caption,
+  flex: '0 0 auto',
+  color: T.labelTertiary,
+}
+
+/** 标题那一行：标题 + `↗`（`↗` 跟着标题走，不单独占一行）。 */
+export const popoverTitleRow: CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  gap: S.xs,
 }
 
 /** 明细行：标签定宽左列 + 值右列，值可折行。 */
