@@ -76,6 +76,7 @@ import {
   ProjectLens,
   ScheduleLens,
   SchedulePopover,
+  TodoPopover,
   SetupForm,
   TodoLens,
   type ScheduleForm,
@@ -351,16 +352,28 @@ function Workbench(): JSX.Element {
    * 不做跟随重定位——跟随要持续观测，收益不值那份复杂度。
    */
   const [detail, setDetail] = useState<{
+    readonly kind: 'schedule' | 'todo'
     readonly project: string
     readonly line: number
     readonly anchor: Rect
   } | null>(null)
+  /**
+   * 明细窗要显示的那一条：**按身份现取**，不抱着点击那一刻的对象。
+   *
+   * 两种条目共用同一个 `detail`，靠 `kind` 决定去哪张表里找——待办与日程的行号
+   * 在各自章节里各算各的，光看 `project + line` 会取错条目。
+   */
   const detailRow =
     detail === null || overview === null
       ? null
-      : (overview.schedules.find(
-          (row) => row.project === detail.project && row.line === detail.line,
-        ) ?? null)
+      : (() => {
+          const from =
+            detail.kind === 'todo' ? overview.todos : overview.schedules
+          const found = from.find(
+            (row) => row.project === detail.project && row.line === detail.line,
+          )
+          return found === undefined ? null : { kind: detail.kind, row: found }
+        })()
   /**
    * 新建条目的悬浮窗。
    *
@@ -690,7 +703,17 @@ function Workbench(): JSX.Element {
    * 而不是"某一天"。
    */
   const openSchedule = useCallback((row: ScheduleRow, anchor: Rect) => {
-    setDetail({ project: row.project, line: row.line, anchor })
+    setDetail({ kind: 'schedule', project: row.project, line: row.line, anchor })
+  }, [])
+
+  /**
+   * 打开某一条待办的明细悬浮窗（与 `openSchedule` 对称）。
+   *
+   * 待办条散布在四个象限与项目详情里，但它们上报的都是"某一条"（`project + line`），
+   * 所以这里只有一条路径——**同一个手势，同一张窗**。
+   */
+  const openTodo = useCallback((row: TodoRow, anchor: Rect) => {
+    setDetail({ kind: 'todo', project: row.project, line: row.line, anchor })
   }, [])
 
   /**
@@ -703,12 +726,17 @@ function Workbench(): JSX.Element {
    * 2. **窗不关**：打开的是外部编辑器，用户回来大概率还要接着看这条日程（或改状态）。
    * 3. **结果如实报**：跳行没跳成、文件已被外部改过，都要在横幅里说出来。
    */
-  const openSource = useCallback(async (row: ScheduleRow) => {
+  const openSource = useCallback(async (row: {
+    readonly project: string
+    readonly topLevelDir: string
+    readonly line: number
+    readonly kind: 'schedule' | 'todo'
+  }) => {
     try {
       const result = await postOpenSource({
         project: row.project,
         topLevelDir: row.topLevelDir,
-        kind: 'schedule',
+        kind: row.kind,
         line: row.line,
       })
       setBanner(openSourceMessage(result))
@@ -791,7 +819,9 @@ function Workbench(): JSX.Element {
       // 点在浮层自己身上不算"点别处"——表单里点任何一个输入框都不该把窗关掉。
       const inside =
         target !== null &&
-        target.closest('[data-fl="schedule-popover"], [data-fl="create-popover"]') !== null
+        target.closest(
+          '[data-fl="schedule-popover"], [data-fl="todo-popover"], [data-fl="create-popover"]',
+        ) !== null
       swallowBlankRef.current = false
       if (inside) return
       // 确实关了东西：紧接着那一次 click 落到空白热区上要吞掉，否则"关一个窗"会顺手
@@ -845,6 +875,7 @@ function Workbench(): JSX.Element {
           onToggleTodo: toggleTodo,
           onToggleSchedule: toggleSchedule,
           onOpenSchedule: openSchedule,
+          onOpenTodo: openTodo,
           onCompose: openCompose,
         }
 
@@ -1064,22 +1095,39 @@ function Workbench(): JSX.Element {
           {/* 悬浮窗挂在**面板**下、主体区之外：格子里有 `overflow: hidden`，
               挂进去会被裁掉。它渲染在说明层之前，所以说明页打开时会盖住它
               （那条路径上悬浮窗本来也已经关掉了）。 */}
-          {detail === null || detailRow === null ? null : (
-            <SchedulePopover
-              row={detailRow}
+          {detail === null || detailRow === null ? null : detailRow.kind === 'todo' ? (
+            <TodoPopover
+              row={detailRow.row as TodoRow}
               anchor={detail.anchor}
               bounds={popoverBounds(bodyRef.current, geometry)}
               origin={{ left: geometry.left, top: 0 }}
               color={
-                detailRow.priority === undefined
+                detailRow.row.priority === undefined
                   ? T.unset
-                  : (overview?.priorityColors[detailRow.priority] ?? T.unset)
+                  : (overview?.priorityColors[detailRow.row.priority] ?? T.unset)
               }
-              done={doneOf(detailRow)}
+              done={doneOf(detailRow.row)}
               hover={hover}
               setHover={setHover}
-              onToggle={() => void toggleSchedule(detailRow)}
-              onOpenSource={() => void openSource(detailRow)}
+              onToggle={() => void toggleTodo(detailRow.row as TodoRow)}
+              onOpenSource={() => void openSource({ ...(detailRow.row as TodoRow), kind: 'todo' })}
+            />
+          ) : (
+            <SchedulePopover
+              row={detailRow.row as ScheduleRow}
+              anchor={detail.anchor}
+              bounds={popoverBounds(bodyRef.current, geometry)}
+              origin={{ left: geometry.left, top: 0 }}
+              color={
+                detailRow.row.priority === undefined
+                  ? T.unset
+                  : (overview?.priorityColors[detailRow.row.priority] ?? T.unset)
+              }
+              done={doneOf(detailRow.row)}
+              hover={hover}
+              setHover={setHover}
+              onToggle={() => void toggleSchedule(detailRow.row as ScheduleRow)}
+              onOpenSource={() => void openSource({ ...(detailRow.row as ScheduleRow), kind: 'schedule' })}
             />
           )}
 

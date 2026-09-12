@@ -523,17 +523,80 @@ describe('点击粒度：周 / 月都走"点条目 → 弹明细"', () => {
   })
 
   it('明细窗里确实有一个改状态的按钮', () => {
-    const body = bodyOf('SchedulePopover')
+    const body = bodyOf('DetailPopover')
     expect(body).toContain('data-fl="popover-toggle"')
     expect(body).toContain('onToggle')
   })
 
   it('明细窗的标题是"打开原始 markdown"的入口', () => {
-    const body = bodyOf('SchedulePopover')
+    const body = bodyOf('DetailPopover')
     expect(body, '标题要能点开原始 markdown').toContain('data-fl="popover-source"')
     expect(body, '点了标题要真的发请求，而不是只改个样式').toContain('onOpenSource')
     expect(body, '标题按钮要用登记过的样式（它有 UA 边框与 UA 字号两个坑）').toContain(
       'UI.popoverTitleButton',
+    )
+  })
+
+  it('日程与待办共用同一个明细窗（不是两份会长歪的实现）', () => {
+    // 两个包装各自只做一件事：把数据映射成 DetailView + 报上自己的标记。
+    for (const [wrapper, marker, detailOf] of [
+      ['SchedulePopover', 'schedule-popover', 'scheduleDetail'],
+      ['TodoPopover', 'todo-popover', 'todoDetail'],
+    ] as const) {
+      const body = bodyOf(wrapper)
+      expect(body, `${wrapper} 要用共用的 DetailPopover`).toContain('<DetailPopover')
+      expect(body, `${wrapper} 要报上自己的标记 ${marker}`).toContain(`marker="${marker}"`)
+      expect(body, `${wrapper} 要把行号传下去（点标题要定位到行）`).toContain('line={props.row.line}')
+      expect(body, `${wrapper} 要用自己的取数函数`).toContain(detailOf)
+    }
+  })
+})
+
+/**
+ * 待办条：**点条目弹明细窗**（与点日程条同一个手势），而**点复选框仍然只是勾选**。
+ *
+ * 这两个动作必须在同一行上分得开：复选框是用户心里"打勾"的那个小方框，行是"这一条"。
+ * 复选框不挡 click 冒泡的话，勾一下会同时弹出一个窗——那是最烦人的那种界面行为。
+ */
+describe('待办条：点条目弹明细，点复选框只勾选', () => {
+  const VIEWS = readFileSync(new URL('../src/views.tsx', import.meta.url), 'utf8')
+
+  const bodyOf = (name: string): string => {
+    const start = VIEWS.indexOf(`function ${name}(`)
+    expect(start, `找不到 ${name}，说明结构变了，请同步这个守卫`).toBeGreaterThan(-1)
+    const rest = VIEWS.slice(start + 1)
+    const end = rest.search(/\n(function |\/\* )/)
+    return end < 0 ? rest : rest.slice(0, end)
+  }
+
+  it('待办线索的条目点了要弹明细窗', () => {
+    const body = bodyOf('TodoLineCompact')
+    expect(body, '点待办条要弹明细窗').toContain('onOpenTodo')
+    expect(body, '落点用条目自己的矩形（窗要贴着那一条）').toContain('getBoundingClientRect')
+  })
+
+  it('项目详情里的待办行同样能点开', () => {
+    const body = bodyOf('TodoLineDetail')
+    expect(body).toContain('onOpenTodo')
+    expect(body, '点标题开原文的手势要在两种视图里都成立').toContain('data-fl-item')
+  })
+
+  it('复选框把 click 挡在行内（勾选不该顺手弹窗）', () => {
+    for (const name of ['TodoLineCompact', 'TodoLineDetail']) {
+      const body = bodyOf(name)
+      expect(body, `${name} 的复选框要 stopPropagation`).toContain(
+        'onClick={(event) => event.stopPropagation()}',
+      )
+      expect(body, `${name} 的复选框仍然能勾选`).toContain('onToggleTodo')
+    }
+  })
+
+  it('两个线索都把 onOpenTodo 发下去（编排层只认这一个入口）', () => {
+    const client = readFileSync(new URL('../src/client.tsx', import.meta.url), 'utf8')
+    expect(client, '编排层要提供 onOpenTodo').toContain('onOpenTodo: openTodo')
+    expect(client, '待办明细窗要真的被渲染').toContain('<TodoPopover')
+    expect(client, '两种明细窗都要能按 kind 找到对应条目').toMatch(
+      /detail\.kind === 'todo' \? overview\.todos : overview\.schedules/,
     )
   })
 })

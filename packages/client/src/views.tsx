@@ -70,6 +70,8 @@ import {
   rowCapacity,
   sameSpot,
   scheduleDetail,
+  todoDetail,
+  type DetailView,
   schedulesByDay,
   schedulesInRange,
   schedulesOnDay,
@@ -103,6 +105,13 @@ export interface ViewProps {
    * 供悬浮窗定位——传数值快照而不是 `DOMRect` 本身，免得把一个活对象存进 state。
    */
   readonly onOpenSchedule: (row: ScheduleRow, anchor: Rect) => void
+  /**
+   * 点到**一条待办**：弹它的明细窗（`project` + `line` 精确定位，不是"某一格"）。
+   *
+   * 与 `onOpenSchedule` 对称：待办条与日程条在"点一下会发生什么"上必须一致，
+   * 否则同一套界面里会长出两种手势。
+   */
+  readonly onOpenTodo: (row: TodoRow, anchor: Rect) => void
   /**
    * 点到**一块空白**（含各容器的标题行）：在那儿新建。
    *
@@ -704,9 +713,13 @@ function almanacTip(entry: AlmanacEntry): string {
 }
 
 /**
- * 点到某一条日程时弹出的明细窗。
+ * 点到某一条**日程或待办**时弹出的明细窗（同一个组件，两种条目共用）。
  *
- * 三件事刻意这么做：
+ * 为什么合成一个：两种条目的窗在结构上一模一样（优先级色点 → 可点的标题 → 字段 → 切换
+ * 按钮），只有字段内容不同。**分成两个组件迟早会长出两个手势**——上一轮刚为"同一动作在
+ * 两个形态里必须是同一个手势"付过学费（周条与月历小条），所以这里从一开始就只有一份。
+ *
+ * 三条刻意的地方：
  *
  * 1. **挂在面板下、不挂在格子里**：格子有 `overflow: hidden`，挂进去会被裁掉。
  *    组件本身是 `position: absolute`，由编排层放在 `aside` 的直接子节点位置。
@@ -715,9 +728,17 @@ function almanacTip(entry: AlmanacEntry): string {
  *    量到之前用 `visibility: hidden` 兜住那一帧。
  * 3. **落点算法在 `view.ts` 的 `popoverPosition()` 里**（纯函数、可单测）：
  *    默认贴条下方左对齐，下方放不下翻到上方，左右越界夹回来。
+ *
+ * `marker` 是两个 `data-fl` 标记（`schedule-popover` / `todo-popover`）：探针与"点别处
+ * 关窗"的命中判断都要能分清是哪一种，而两种都带着同一个 `data-fl-kind`。
  */
-export function SchedulePopover(props: {
-  readonly row: ScheduleRow
+function DetailPopover(props: {
+  readonly detail: DetailView
+  /** 条目在文件里的行号（标题按钮上带着它，点标题打开原文时用）。 */
+  readonly line: number
+  /** 这一条的身份，供无障碍标签与探针区分。 */
+  readonly kind: '日程' | '待办'
+  readonly marker: string
   readonly anchor: Rect
   /** 允许出现的范围（面板主体区的视口矩形）。 */
   readonly bounds: Rect
@@ -732,7 +753,7 @@ export function SchedulePopover(props: {
   /** 「点标题 → 用系统默认程序打开原始 markdown」（由编排层发请求并报结果）。 */
   readonly onOpenSource: () => void
 }): JSX.Element {
-  const detail = scheduleDetail(props.row)
+  const detail = props.detail
   const ref = useRef<HTMLDivElement | null>(null)
   const [spot, setSpot] = useState<PopoverSpot | null>(null)
 
@@ -754,9 +775,10 @@ export function SchedulePopover(props: {
   return (
     <div
       ref={ref}
-      data-fl="schedule-popover"
+      data-fl={props.marker}
+      data-fl-kind={props.kind === '待办' ? 'todo' : 'schedule'}
       role="dialog"
-      aria-label={`日程明细：${detail.title}`}
+      aria-label={`${props.kind}明细：${detail.title}`}
       style={{
         ...UI.schedulePopover,
         left: spot === null ? 0 : spot.left - props.origin.left,
@@ -774,17 +796,17 @@ export function SchedulePopover(props: {
       </span>
 
       {/* **标题就是"打开原始 markdown"的入口**（用户指定的手势）：点它用系统默认程序
-          打开这条日程所在的工作日志，并尽量跳到第 `line` 行。做成标题本身、而不是旁边
+          打开这一条所在的工作日志，并尽量跳到第 `line` 行。做成标题本身、而不是旁边
           再加一个按钮——一个浮层里两个按钮，用户得先想"我该点哪个"。
           右侧那个 `↗` 是唯一的提示：不加它，谁也不会想到标题能点。 */}
       <span style={UI.popoverTitleRow}>
         <button
           type="button"
           data-fl="popover-source"
-          data-fl-line={props.row.line}
+          data-fl-line={props.line}
           style={UI.popoverTitleButton(props.hover === sourceKey)}
-          aria-label={`用系统默认程序打开这份工作日志（第 ${props.row.line} 行）：${detail.title}`}
-          title={`用系统默认程序打开工作日志，并定位到第 ${props.row.line} 行`}
+          aria-label={`用系统默认程序打开这份工作日志（第 ${props.line} 行）：${detail.title}`}
+          title={`用系统默认程序打开工作日志，并定位到第 ${props.line} 行`}
           {...hoverProps(sourceKey, props)}
           onClick={props.onOpenSource}
         >
@@ -823,6 +845,54 @@ export function SchedulePopover(props: {
         </button>
       </span>
     </div>
+  )
+}
+
+/** 点到一条**日程**时的明细窗（周条 / 月历小条都会开它）。 */
+export function SchedulePopover(props: {
+  readonly row: ScheduleRow
+  readonly anchor: Rect
+  readonly bounds: Rect
+  readonly origin: { readonly left: number; readonly top: number }
+  readonly color: string
+  readonly done: boolean
+  readonly hover: string | null
+  readonly setHover: (key: string | null) => void
+  readonly onToggle: () => void
+  readonly onOpenSource: () => void
+}): JSX.Element {
+  return (
+    <DetailPopover
+      {...props}
+      detail={scheduleDetail(props.row)}
+      line={props.row.line}
+      kind="日程"
+      marker="schedule-popover"
+    />
+  )
+}
+
+/** 点到一条**待办**时的明细窗——与日程共用同一个组件，所以手势与几何完全一致。 */
+export function TodoPopover(props: {
+  readonly row: TodoRow
+  readonly anchor: Rect
+  readonly bounds: Rect
+  readonly origin: { readonly left: number; readonly top: number }
+  readonly color: string
+  readonly done: boolean
+  readonly hover: string | null
+  readonly setHover: (key: string | null) => void
+  readonly onToggle: () => void
+  readonly onOpenSource: () => void
+}): JSX.Element {
+  return (
+    <DetailPopover
+      {...props}
+      detail={todoDetail(props.row)}
+      line={props.row.line}
+      kind="待办"
+      marker="todo-popover"
+    />
   )
 }
 
@@ -1292,6 +1362,11 @@ export function TodoLens(props: ViewProps): JSX.Element {
  * 不缀项目标签是刻意的：条目行高固定 26px，一格宽度也就 550px，再塞一个
  * 8–15 字的案件名会把标题挤成省略号——而标题才是这一格要回答的问题。
  * 所属项目走悬浮提示（`title` 里已经带了）。
+ *
+ * 两个动作、两个落点，**必须分得开**：
+ *
+ * - 点**复选框** = 勾选/取消（复选框自己把 click 挡在行内，否则会同时弹窗）；
+ * - 点**行的其余部分** = 弹这一条的明细窗（和点日程条一样：看清楚再改）。
  */
 function TodoLineCompact(
   props: ViewProps & { readonly row: TodoRow },
@@ -1307,12 +1382,14 @@ function TodoLineCompact(
       style={UI.todoRow(props.hover === key, done)}
       title={`${row.title}（${row.project}）`}
       {...hoverProps(key, props)}
+      onClick={(event) => props.onOpenTodo(row, event.currentTarget.getBoundingClientRect())}
     >
       <input
         type="checkbox"
         style={UI.checkbox(row.priority === undefined ? T.unset : props.overview.priorityColors[row.priority])}
         checked={done}
         aria-label={row.title}
+        onClick={(event) => event.stopPropagation()}
         onChange={() => props.onToggleTodo(row)}
       />
       <span style={UI.todoTitle(done)}>{row.title}</span>
@@ -1473,7 +1550,13 @@ function TodoLineDetail(props: ViewProps & { readonly row: TodoRow }): JSX.Eleme
   const key = `td-${row.project}#${row.line}`
   const done = props.doneOf(row)
   return (
-    <div data-fl="detail-row" data-fl-item style={UI.detailRow(props.hover === key, done)} {...hoverProps(key, props)}>
+    <div
+      data-fl="detail-row"
+      data-fl-item
+      style={UI.detailRow(props.hover === key, done)}
+      {...hoverProps(key, props)}
+      onClick={(event) => props.onOpenTodo(row, event.currentTarget.getBoundingClientRect())}
+    >
       <input
         type="checkbox"
         style={{
@@ -1482,6 +1565,7 @@ function TodoLineDetail(props: ViewProps & { readonly row: TodoRow }): JSX.Eleme
         }}
         checked={done}
         aria-label={row.title}
+        onClick={(event) => event.stopPropagation()}
         onChange={() => props.onToggleTodo(row)}
       />
       <span style={UI.itemBody}>

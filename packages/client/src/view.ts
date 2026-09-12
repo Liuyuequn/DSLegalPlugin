@@ -398,8 +398,8 @@ export interface DetailField {
   readonly value: string
 }
 
-/** 一条日程的明细。 */
-export interface ScheduleDetail {
+/** 一条**日程或待办**在明细窗里要显示的内容——两者同构，所以共用一个类型与一份渲染。 */
+export interface DetailView {
   readonly title: string
   readonly priority: Priority | null
   readonly done: boolean
@@ -412,7 +412,7 @@ export interface ScheduleDetail {
  *
  * 只列有值的字段：一条"全天、无地点、无备注"的日程本该只有三行，不该撑出一堆「—」。
  */
-export function scheduleDetail(row: ScheduleCore & { readonly project: string }): ScheduleDetail {
+export function scheduleDetail(row: ScheduleCore & { readonly project: string }): DetailView {
   const fields: DetailField[] = [
     { label: '日期', value: dateLabel(row) },
     { label: '时间', value: timeLabel(row) },
@@ -420,6 +420,25 @@ export function scheduleDetail(row: ScheduleCore & { readonly project: string })
   if (row.location !== undefined) fields.push({ label: '地点', value: row.location })
   fields.push({ label: '项目', value: row.project })
   if (row.note !== undefined) fields.push({ label: '备注', value: row.note })
+
+  return {
+    title: row.title,
+    priority: row.priority ?? null,
+    done: row.done,
+    fields,
+  }
+}
+
+/**
+ * 把一条待办整理成悬浮窗要显示的内容（与 `scheduleDetail` 同构，明细窗才能共用一套渲染）。
+ *
+ * 待办可显示的字段本来就少（没有日期 / 时间 / 地点），所以只有「项目」与有值的「备注」；
+ * 完成状态由窗底部那个切换按钮表达，不再单独占一行——**同一件事在窗里出现两次，
+ * 用户会怀疑它们是不是一回事**。
+ */
+export function todoDetail(row: TodoCore & { readonly project: string }): DetailView {
+  const fields: DetailField[] = [{ label: '项目', value: row.project }]
+  if (row.note !== undefined && row.note.length > 0) fields.push({ label: '备注', value: row.note })
 
   return {
     title: row.title,

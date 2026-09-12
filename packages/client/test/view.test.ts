@@ -36,6 +36,7 @@ import {
   sortSchedules,
   startOfWeek,
   timeLabel,
+  todoDetail,
   todayKey,
   unrankedTodos,
   weekDays,
@@ -758,7 +759,52 @@ describe('新建条目：校验与 host 用的是同一份规则', () => {
 })
 
 /**
- * 「点日程标题 → 打开原始 markdown」之后要报什么。
+ * 「点待办条 → 弹明细窗」要显示什么。
+ *
+ * 与 `scheduleDetail` 同构是**刻意**的：两种条目共用同一个明细窗组件，字段结构不一致
+ * 就会长出两套渲染。待办的字段本来就少（没有日期 / 时间 / 地点），所以只有「项目」与
+ * 有值的「备注」；完成状态交给窗底部那个切换按钮，不在这里重复一遍。
+ */
+describe('todoDetail：待办的明细内容', () => {
+  const todo = (over: Partial<TodoRow> = {}): TodoRow => ({
+    project: '甲诉乙',
+    topLevelDir: '诉讼案件',
+    line: 7,
+    done: false,
+    title: '整理证据',
+    ...over,
+  })
+
+  it('只列「项目」，没备注就不给空字段', () => {
+    const detail = todoDetail(todo())
+    expect(detail.fields.map((field) => field.label)).toEqual(['项目'])
+    expect(detail.fields[0]!.value).toBe('甲诉乙')
+  })
+
+  it('有备注才多一行', () => {
+    expect(todoDetail(todo({ note: '先联系承办法官' })).fields).toHaveLength(2)
+    // 空串也算"没有"：数据契约里空字段写 `[]`，解析回来可能是空串。
+    expect(todoDetail(todo({ note: '' })).fields).toHaveLength(1)
+  })
+
+  it('未设优先级给 null（明细窗据此显示"未设优先级"，不拿主色兜底）', () => {
+    expect(todoDetail(todo()).priority).toBeNull()
+    expect(todoDetail(todo({ priority: '重要且紧急' })).priority).toBe('重要且紧急')
+  })
+
+  it('完成状态原样带出（窗里那个按钮要显示对）', () => {
+    expect(todoDetail(todo({ done: true })).done).toBe(true)
+    expect(todoDetail(todo()).done).toBe(false)
+  })
+
+  it('标题原样带出，不做省略——明细窗的任务就是把整条读全', () => {
+    const long = '阅卷并整理三份证据材料清单（含银行流水与微信聊天记录）'
+    expect(todoDetail(todo({ title: long })).title).toBe(long)
+  })
+})
+
+/**
+ * 「点标题 → 打开原始 markdown」之后要报什么。
  *
  * 这里钉的不是文案好看，而是**三件必须说出口的事**：跳行没跳成、文件被外部改过、
  * 根本没能打开。少说任何一件，用户都会得到一个错误的心智模型（"它跳过去了"）。
