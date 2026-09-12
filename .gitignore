@@ -1,0 +1,22 @@
+# 依赖与构建产物
+node_modules/
+lib/
+dist/
+coverage/
+*.tsbuildinfo
+
+# 非代码类文档（人与 AI 沟通用），按约定不纳入版本控制
+maintenance/
+
+# 本地演示 / 测试数据
+sandbox/
+
+# 设计参考图与截图：**可能含真实数据**（2026-09-12 曾把一批含真实案名与日程的截图
+# 推到了公开仓库，事后连同全部历史一起重建）。这类图片一律不进版本控制。
+ref/
+
+# 编辑器与系统文件
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

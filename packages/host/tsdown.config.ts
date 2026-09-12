@@ -1,0 +1,10 @@
+import { defineConfig } from 'tsdown'
+
+export default defineConfig({
+  entry: ['src/index.ts'],
+  outDir: 'lib',
+  fixedExtension: false,
+  dts: true,
+  sourcemap: true,
+  clean: true,
+})
