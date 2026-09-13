@@ -100,4 +100,37 @@ describe('产物自足（复制安装的前提）', () => {
     const hostBundle = readFileSync(join(pkgDir, 'lib', 'index.js'), 'utf8')
     expect(/export\s+default/.test(hostBundle)).toBe(false)
   })
+
+  /**
+   * host 面的**外部依赖只允许 Node 内置模块**。
+   *
+   * 断言的是"发布安装"的前提：本包 `dependencies` 为空，用户装到 profile 后
+   * 不会有任何 npm 包被带进来。若某次改动让 `chokidar` / `schemastery` 之类
+   * 变成外部 import（例如把它们从 `alwaysBundle` 漏掉、或误挪出 devDependencies），
+   * 用户侧会 `ERR_MODULE_NOT_FOUND`、插件整体加载失败、面板消失——而**服务器端
+   * 与本地 profile 都不会报错**（因为本地 node_modules 里恰好有这些包）。
+   * 所以这里只认 `node:` 前缀与相对路径，多一个裸包名就失败。
+   */
+  it('host 面只依赖 Node 内置模块（发布后无 npm 依赖）', () => {
+    const hostBundle = readFileSync(join(pkgDir, 'lib', 'index.js'), 'utf8')
+    const specifiers = new Set<string>()
+    // import ... from "X" / import "X"；require("X")。
+    // 捕获组在类型上是 `string | undefined`，用 `?? ''` 收窄（空串不会匹配下面的裸包名判断）。
+    for (const m of hostBundle.matchAll(/import\s+(?:[^;"']*?\s+from\s+)?"([^"]+)"/g)) specifiers.add(m[1] ?? '')
+    for (const m of hostBundle.matchAll(/require\(\s*"([^"]+)"\s*\)/g)) specifiers.add(m[1] ?? '')
+    specifiers.delete('')
+
+    const bare = [...specifiers].filter(
+      (spec) => !spec.startsWith('node:') && !spec.startsWith('.') && !spec.startsWith('/'),
+    )
+    expect(bare).toEqual([])
+    expect(specifiers.size).toBeGreaterThan(0)
+  })
+
+  it('dependencies 为空（内部三包只是构建输入，必须留在 devDependencies）', () => {
+    const manifest = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8')) as {
+      dependencies?: Record<string, string>
+    }
+    expect(Object.keys(manifest.dependencies ?? {})).toEqual([])
+  })
 })

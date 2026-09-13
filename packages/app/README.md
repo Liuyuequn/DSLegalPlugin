@@ -1,71 +1,190 @@
 # dsh-legal-schedule
 
-DSLegalPlugin 的**对外统一包**——也是本仓库**唯一**的 DSH 插件包。
+**律师日程与待办可视化管理工作台** —— 一支 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）插件。
 
-一个包同时提供两半，因此 DSH 的「插件设置」里只出现**一个条目**：
+它把你在磁盘上的 markdown **工作日志**渲染成一个工作台面板：日程（日 / 周 / 月三种日历形态）、待办（四象限）、项目（案件明细）。**文件即数据库**——插件不建数据库、不迁移数据，只读写你自己的 markdown 文件。
 
-| 出口 | 运行位置 | 内容 |
-| --- | --- | --- |
-| `lib/index.js`（`exports["."]`） | host（Node） | `legal_*` 工具 + `/dslegal/*` HTTP + 工作日志监听 |
-| `lib/client.js`（`exports["./client"]`，由 `dsh.client` 声明） | client（浏览器） | 「法程」工作台面板 |
+---
 
-## 为什么是"一个包"而不是"一个 host 包 + 一个 client 包"
+## 它是什么 / 不是什么
 
-DSH 的插件设置列出的是 **loader 行**（`dsh-host-plugin-inventory` 直接遍历
-`ctx.loader.entries()` 取 `entry.id` / `entry.options.name`）。所以：
+| | |
+| --- | --- |
+| ✅ 是 | 一支 DSH 插件。装好后在 DSH 网页界面里多一个「法程」浮标，点开就是工作台。 |
+| ✅ 是 | 对**你已有的本地 markdown 文件**做可视化。数据始终在你自己的磁盘上。 |
+| ❌ 不是 | 独立软件。**没有 DSH 就没有宿主，插件无处挂载。** |
+| ❌ 不是 | 云服务 / 协作工具。没有账号、没有服务器、不上传任何数据。 |
+| ❌ 不是 | 通用日历。它只认下文那套目录与章节约定。 |
 
-> **一行 loader = 一张卡。**
+> **当前阶段**：`0.1.x` 为早期版本。DSH 本身仍在 rc 阶段，接口可能变动——升级 DSH 后若面板消失，见文末「出问题时」。
 
-早先的形态是两行（`@dslegal/host` + `@dslegal/client-ui`），于是搜索 `legal` 会命中两次、
-界面上出现两张卡。DSH 支持"一个包同时是 host 插件与 client 插件"——浏览器面通过
-package.json 的 `dsh.client` 声明挂在**同一行**上——所以合并成一个包后：
+---
 
-- 仍然只需要一行 loader 条目；
-- 浏览器面被发现的机制不变（`dsh-client-modules` 扫描各行的 `dsh.client` 声明）；
-- 界面上只剩一张卡。
+## 环境要求
 
-平台自己的 `dsh-web-plugin-manager` 就是这个形态。
+| 要求 | 说明 |
+| --- | --- |
+| DSH | **≥ 0.1.5-rc.2**（本插件的浏览器半边依赖该版本提供的 `shell.overlay` 插槽与 `dsh.client` 装配机制） |
+| DSH profile | `web`（本插件是网页界面插件，`headless` profile 看不到面板） |
+| Node.js | ≥ 20 |
+| 操作系统 | Windows / macOS / Linux（「点标题打开原始 markdown」的跳行能力在 Windows 上验证最充分） |
 
-## 构建：两半都自足
+---
 
-```tsdown.config.ts` 有两个入口，`deps.alwaysBundle: [/^@dslegal\//]` 把 workspace 包**强制内联**：
+## 安装
 
-- host 面 ≈ 778 KB（内联 `@dslegal/host` + `@dslegal/core`）
-- 浏览器面 ≈ 687 KB（从 `@dslegal/client-ui` 的**源码**内联，含 `@dslegal/core`）
+### 方式一：用 DSH 插件管理器（推荐）
 
-这样"复制产物"的安装方式（见 AGENTS.md「profile 安装方式」）只需放一个目录。
+社区里已有多个 DSH 插件管理器支持一键安装三方插件，例如
+[dsh-web-plugin-manager](https://github.com/LX2000WASD/dsh-web-plugin-manager)、
+[webkong/dsh-plugin-manager](https://github.com/webkong/dsh-plugin-manager)、
+[relay-dsh-plugin-manager](https://github.com/yangbobo2021/relay-dsh-plugin-manager)。
 
-两个必须记住的构建坑：
+在它们的界面里搜索 `dsh-legal-schedule`（或粘贴本仓库地址）即可。
 
-1. **必须用 `deps.alwaysBundle`，不能用已废弃的 `noExternal`**：`noExternal` 只按**裸包名**
-   匹配，带子路径的 `@dslegal/client-ui/browser` 匹配不上，产物只剩 0.7 kB（实测踩过）。
-2. **浏览器面必须从对方的 `src/` 源码入口打包**，不能从它的 `lib/client.js`：后者已是构建好的
-   CJS 工厂形态，外层 rolldown 解析不出命名导出，直接报 `[MISSING_EXPORT]`。
+### 方式二：命令行
 
-另外：`packages/client/lib/` 与 `packages/app/lib/` 都是构建产物（`.gitignore` 忽略 `lib/`），
-改完 `packages/client/src/**` 后**必须重新构建本包**才会进 profile。
-
-## 装入 profile
+本包**自带它需要的那一行 DSH 配置**（`dsh.bundle` 声明，见 `DESIGN.md`），所以你不必手写 YAML：
 
 ```powershell
-corepack pnpm --filter dsh-legal-schedule build
-# 复制到 ~/.dsh/profiles/web/node_modules/dsh-legal-schedule/（package.json + lib/）
+cd $env:USERPROFILE\.dsh\profiles\web     # macOS/Linux: cd ~/.dsh/profiles/web
+dsh plugin add dsh-legal-schedule
 ```
 
-`~/.dsh/profiles/web/cordis.patch.yml` 只需一行：
+然后在**同一个目录**的 `package.json` 里，把这个包名加进 `dsh.profile.bundles` 列表：
 
-```yaml
-- insert:
-    - id: dsh-legal-schedule
-      name: 'dsh-legal-schedule'
+```json
+{
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "dsh-legal-schedule"
+      ]
+    }
+  }
+}
 ```
 
-## 守卫
+最后**重启 DSH**：
 
-`test/plugin.test.ts`（9 项）：
+```powershell
+dsh web
+```
 
-- 全仓库**只有本包**声明 `dsh.client`（多一处声明 = 插件设置里多一张卡）；
-- 声明了 `dsh.client`（platform: web）与 `./client` 出口；
-- 产物 banner 的模块 id 等于包名；
-- 两半产物自足：浏览器面只 `require` react / react/jsx-runtime，`@dslegal/*` 一个不留；
-- host 面不得有 `export default`（loader 会拆包导致 `inject` 丢失）。
+> 重启后请用终端里打印的那个带 `?token=` 的地址打开界面。DSH 每次启动都会轮换这个一次性令牌，用旧标签页会看到一句 `dsh web authentication required`——那是认证过期，不是插件坏了。
+
+### 方式三：从源码安装（开发用）
+
+```powershell
+git clone https://github.com/Liuyuequn/DSLegalPlugin.git
+cd DSLegalPlugin
+corepack pnpm install
+corepack pnpm build
+# 把 packages/app 的 package.json + lib/ + cordis.patch.yml 复制到
+# ~/.dsh/profiles/web/node_modules/dsh-legal-schedule/
+```
+
+---
+
+## 装好之后你会看到什么
+
+1. 左侧会话栏底部、设置按钮旁多出一个 **「法程」浮标**（可以按住拖动，位置会记住；拖回原处即恢复默认位置）。
+2. 点它展开工作台面板，面板顶端一行是线索切换：**日程 / 待办 / 项目**，右侧是「使用说明」「插件设置」「数据刷新」。
+3. **第一次打开请先设「数据目录」**：面板 →「插件设置」→ 填数据根目录并保存。没设之前面板是空的（这是正常的）。
+
+插件设置里有两块，**各自独立保存**：
+
+| 设置 | 作用 |
+| --- | --- |
+| 数据目录 | 你的案件目录树所在的根目录 |
+| 四象限颜色 | 四个优先级在界面上的显示色（默认赤 / 橙 / 黄 / 绿） |
+
+两者都写进 `$DSH_HOME/settings.yaml` 的 `dslegal:` 段，**立即生效**，不写进你的数据文件（文件里只写优先级文字，永远不写颜色）。
+
+---
+
+## 你的数据要长什么样
+
+插件**只认**下面这一条路径：
+
+```
+<数据根目录>/<顶级目录>/<项目>/0. 协作/1. 工作日志.md
+```
+
+- `0. 协作` 与 `1. 工作日志.md` 这两个名字**固定**，不可配置。
+- `<顶级目录>` 默认映射到 8 类法律服务（如「诉讼案件」「法律顾问」），可在插件配置里调整。
+- **目录要你自己建好**，插件不会创建任何目录。
+
+`1. 工作日志.md` 里插件只读写两个二级章节：
+
+```markdown
+# 工作日志_民事
+
+## 1. 待办事项
+- [ ] [起草起诉状]，[重要且紧急]，[周五前给客户看]
+
+## 2. 日程安排
+- [ ] [开庭]，[重要且紧急]，[]，[2026-09-20]，[]，[09:00]，[11:00]，[区法院第三法庭]
+```
+
+- 字段由**半角方括号** `[ ]` 界定；全角逗号只是书写分隔符，可以自由出现在字段内容里。
+- 空字段写 `[]`；字段内容里不要出现半角方括号（需要时用全角 `【】`）。
+- 待办格式：`- [ ] [标题]，[优先级]，[备注]`
+- 日程格式：`- [ ] [标题]，[优先级]，[备注]，[开始日期]，[结束日期]，[开始时间]，[结束时间]，[地点]`
+- **H1 标题决定服务类别**：`# 工作日志_民事` / `_刑事` / `_行政`；认不出时类别记为「未知」，但章节照旧可读写。
+- 优先级四类：`重要且紧急` / `紧急不重要` / `重要不紧急` / `不重要不紧急`。
+
+**格式异常的行不会被静默丢弃**：插件原样保留，并在界面上明确提示。
+**界面与外部编辑冲突时以文件为准**，界面会提示「文件已变更，已重新加载」。
+
+完整的数据约定（三方契约）见仓库的 `maintenance/2. DSLegalPlugin 数据约定规范.md`。
+
+---
+
+## 功能
+
+- **日程**：日 / 周 / 月三种形态。跨日事项在覆盖的每一天都出现；月历格子里铺农历、二十四节气、中国传统节日，以及法定节假日 **「休」/「班」** 标记。
+- **待办**：四个优先级各占一个等面积象限，未完成在前；未设优先级的不进象限、只报条数。
+- **项目**：点进某个案件看它**全部**待办（四象限、带备注）与日程（按时间升序）。
+- **交互**：点条目弹明细窗（可切换完成状态）；**点空白处在那个位置新建**（点在哪个象限 / 哪一天，决定预填的优先级与日期）；新建时项目可搜索切换；点明细窗里的标题用系统默认程序打开原始 markdown 并尽量跳到该行。
+- **隐私**：插件只读写你指定的数据根目录下的 `1. 工作日志.md`，并把数据目录与颜色写进 `$DSH_HOME/settings.yaml`。**不联网、不上传。**
+
+### 已知限制
+
+- **法定节假日数据止于 2026 年**（来自上游 `lunar-javascript` 收录的国务院公告）。2027 年起格子不再显示「休 / 班」——插件**不猜**（猜错会让律师把调休上班日当成休息日）。农历与节气照常显示（可推算）。
+- **只认 `0. 协作/1. 工作日志.md` 这一条路径**，也不接受 `## 1. 待办任务` 这类同义章节名。这是刻意的：不猜路径，才不会把条目写进你没想到的文件里。代价是只有符合约定的项目能被读到。
+- 首批只完整支持**民事诉讼**场景的分类语义，其余类别可正常读写，但界面配色与文案仍沿用民事诉讼那套。
+- 「点标题打开原始 markdown」的**跳行**只对认得出的编辑器生效（VS Code / Cursor / Notepad++ / Sublime / JetBrains）；其余编辑器只打开文件，界面会**明说没跳到行**。
+
+---
+
+## 卸载
+
+1. 从 profile 的 `package.json` 的 `dsh.profile.bundles` 里删掉 `dsh-legal-schedule`。
+2. `dsh plugin remove dsh-legal-schedule`（或直接在 profile 目录里 `pnpm remove dsh-legal-schedule`）。
+3. 重启 DSH。
+
+**你的数据文件不会被删**——插件从不创建、也不清理你的案件目录。`$DSH_HOME/settings.yaml` 里的 `dslegal:` 段可以留着（下次装回来还在），也可以手动删掉。
+
+---
+
+## 出问题时
+
+| 现象 | 先查什么 |
+| --- | --- |
+| 界面只剩一句 `dsh web authentication required` | 认证令牌过期。用 `dsh web` 新打印的 `?token=…` 地址打开。 |
+| 重启后浮标没出现 | profile 的 `dsh.profile.bundles` 里有没有这个包名；是否真的重启了 DSH（旧进程残留会让浏览器连着旧实例）。 |
+| 面板在但没有数据 | 数据目录设了吗？目录树是否符合上文约定？ |
+| DSH 升级后浮标消失 | 本插件按 DSH 的 rc 接口实现。先看 DSH 启动终端有没有插件装配报错，然后到仓库提 issue（附 DSH 版本号）。 |
+
+更细的排障（按症状索引）见仓库的 `maintenance/3. DSLegalPlugin 事故复盘与排障手册.md`。
+
+---
+
+## 许可
+
+[MIT](../../LICENSE) © 2026 刘越群
+
+想了解内部实现（为什么不拆成两个包、两半产物如何构建），见 [`DESIGN.md`](./DESIGN.md)。

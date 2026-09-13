@@ -1,7 +1,32 @@
 {
   "name": "dsh-legal-schedule",
-  "version": "0.0.0",
-  "description": "DSLegalPlugin 的对外统一包：一个包同时提供 host 面（legal_* 工具与 /dslegal/* HTTP）与浏览器面（「法程」工作台面板），因此在 DSH 插件设置里只占一个条目。",
+  "version": "0.1.0",
+  "description": "律师日程与待办可视化管理工作台 —— DeepSeek Harness (DSH) 插件：把本地 markdown 工作日志渲染成日历 / 四象限待办 / 项目明细三条线索。",
+  "license": "MIT",
+  "author": "刘越群",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Liuyuequn/DSLegalPlugin.git",
+    "directory": "packages/app"
+  },
+  "homepage": "https://github.com/Liuyuequn/DSLegalPlugin#readme",
+  "bugs": {
+    "url": "https://github.com/Liuyuequn/DSLegalPlugin/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-plugin",
+    "law-firm",
+    "legal",
+    "schedule",
+    "todo",
+    "calendar",
+    "markdown"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -14,30 +39,32 @@
     "./package.json": "./package.json"
   },
   "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "inject": ["@deepseek-ai/dsh-client-ui-layout"],
       "platform": "web"
     }
   },
   "files": [
-    "lib"
+    "lib/*.js",
+    "cordis.patch.yml"
   ],
   "scripts": {
     "build": "tsdown",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
-    "@dslegal/client-ui": "workspace:*",
-    "@dslegal/core": "workspace:*",
-    "@dslegal/host": "workspace:*"
-  },
+  "dependencies": {},
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
     "react": "^18.3.1"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
+    "@dslegal/client-ui": "workspace:*",
+    "@dslegal/core": "workspace:*",
+    "@dslegal/host": "workspace:*",
     "@types/react": "~18.3.1",
     "react": "^18.3.1",
     "tsdown": "^0.23.0",

@@ -1,0 +1,11 @@
+# dsh-legal-schedule —— 本包自带的一层 patch。
+#
+# 由 `package.json` 的 `"dsh": { "bundle": { "patch": "./cordis.patch.yml" } }` 声明。
+# 用户把这个包名加进 profile 的 `dsh.profile.bundles` 列表后，DSH 会在**启动组合阶段**
+# 自动应用本文件，因此**不需要**手工编辑 profile 的 `cordis.patch.yml`。
+#
+# 一行 loader 条目：host 面与浏览器面同属本包，浏览器面靠 package.json 的
+# `dsh.client` 声明挂在同一行上被发现（不另开 client 行，插件设置里只出现一个条目）。
+- insert:
+    - id: dsh-legal-schedule
+      name: 'dsh-legal-schedule'

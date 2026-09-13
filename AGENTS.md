@@ -32,6 +32,7 @@
 
 - **非代码类、人与 AI 沟通的文档** → `maintenance/`
 - **代码类文档** → 对应代码包内（如 `packages/core/README.md`）
+- **发布流程** → 仓库根 `RELEASING.md`（只发布 `packages/app` 一个包；含发布前不变量、版本兼容点、人工核对清单）
 - **代码** → `packages/` 下的四个包
 
 ```
@@ -134,7 +135,7 @@ DSLegalPlugin/
 
 ## 8. 当前状态与关键决策
 
-**状态**：**P1–P7 已完成**，并已于 **2026-09-13 合并为单一插件包**——core 领域引擎 + host（10 个 `legal_*` 工具 / 扫描 / H1 类别 / 原子读写 / chokidar 监听 / `/dslegal/*` HTTP）+ client（`shell.overlay` 的「法程」面板，以三条线索组织），统一由 `dsh-legal-schedule` 对外、在 DSH 里**只占一个条目**；**已装入 `web` profile**（等重启生效）；共 **363 项测试**（core 106 + client 178 + host 70 + app 9，含插件装配与 HTTP 端到端集成测试），typecheck、build 全通过。
+**状态**：**P1–P7 已完成**，并已于 **2026-09-13 合并为单一插件包**——core 领域引擎 + host（10 个 `legal_*` 工具 / 扫描 / H1 类别 / 原子读写 / chokidar 监听 / `/dslegal/*` HTTP）+ client（`shell.overlay` 的「法程」面板，以三条线索组织），统一由 `dsh-legal-schedule` 对外、在 DSH 里**只占一个条目**；**已装入 `web` profile**（等重启生效）；共 **365 项测试**（core 106 + client 174 + host 70 + app 15，含插件装配、HTTP 端到端集成与发布形态守卫），typecheck、build 全通过。**已具备发布形态**（`0.1.0`，MIT，自带 bundle patch，零 npm 运行期依赖）；发布流程见根目录 `RELEASING.md`。
 
 **P7 之后的十一轮修订**（2026-09-12）：①**四象限颜色可由用户在「插件设置」里自定义**；②**月历格子铺上农历 / 节气 / 中国传统节日 / 法定节假日「休 · 班」**，同时把月历格线从"每格一圈深框"改成**极浅的内部细分隔线**；③**月视图的点击粒度从"日"细化到"日程"**——点某一条日程弹它的明细悬浮窗，不跳日视图（那时"点空白"还什么都不做，**第 ⑦ 轮把它改成了"点空白 → 新建"**，但"不跳日视图"照旧）；④**「法程」启动按钮可拖动**，并修掉"侧边栏折叠后被面板盖住"；⑤**明细悬浮窗里加了切换完成状态的按钮，并复用到周视图**（周形态原先"点整条直接切状态"的手势随之取消）；⑥**项目详情改版**——待办按优先级铺成 **2×2 四象限网格**，并修掉"日程安排浮在界面上、盖住「不重要不紧急」那一组待办"的压扁 bug；⑦**点空白处新建待办 / 日程**——点各容器的空白（含标题行）弹出新建悬浮窗，"点在哪儿"决定预填的优先级与日期；⑧**新建窗的项目选择器**——项目不再写死，可搜索、可切换；⑨**使用说明改版**——默认全部折叠、点标题展开，按用户的动手顺序重排；⑩**点标题打开原始 markdown**——用系统默认程序打开工作日志并尽量跳到该行；⑪**待办条也弹明细窗**——与日程共用同一个 `DetailPopover`，点复选框只勾选、点行弹窗。详见 8.2 各小节。
 
@@ -228,7 +229,7 @@ DSLegalPlugin/
 **profile 安装方式**（本机限制：无全局 pnpm，且 `dsh plugin` 需要它）：
 
 - 因包间用 `workspace:*`，profile 内 pnpm 无法解析 → 采用**复制构建产物**到 `~/.dsh/profiles/web/node_modules/dsh-legal-schedule`（package.json + lib/，**一个目录就够**）。
-- **产物必须自足**，因为这里是"复制"不是"安装"：统一包的两个入口都用 `deps.alwaysBundle: [/^@dslegal\//]` 把 core / host / client-ui 全部内联。**改构建配置后要重新核对**：`app/lib/index.js` 与 `app/lib/client.js` 都不应出现任何 `@dslegal/*` 外部导入；`app/lib/client.js` 的 `require()` 只应出现 `react` 与 `react/jsx-runtime`（守卫：`packages/app/test/plugin.test.ts`）。当前体量：host 面 778KB、浏览器面 687KB（gzip 206 / 185KB）。
+- **产物必须自足**，因为这里是"复制"不是"安装"：统一包的两个入口都用 `deps.alwaysBundle: [/^@dslegal\//]` 把 core / host / client-ui 全部内联。**改构建配置后要重新核对**：`app/lib/index.js` 与 `app/lib/client.js` 都不应出现任何 `@dslegal/*` 外部导入；`app/lib/client.js` 的 `require()` 只应出现 `react` 与 `react/jsx-runtime`（守卫：`packages/app/test/plugin.test.ts`）。当前体量：host 面 839KB、浏览器面 687KB（均为内联后、含核心逻辑）。
 - 在 `~/.dsh/profiles/web/cordis.patch.yml` 插入**一行** `dsh-legal-schedule`（浏览器面靠同一行的 `dsh.client` 声明被发现）；**撤销 = 恢复该文件为 `[]` 并重启 dsh**。
 - 演示数据：`sandbox/法律工作/诉讼案件/张三诉李四民间借贷/0. 协作/1. 工作日志.md`。
 - 排障提示：重启"不生效"时先查端口占用（`Get-NetTCPConnection -LocalPort 3080 -State Listen`）——旧 dsh 进程残留会以 `EADDRINUSE` 顶掉新进程，浏览器看到的仍是旧实例。
