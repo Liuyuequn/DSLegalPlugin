@@ -32,7 +32,7 @@
 
 - **非代码类、人与 AI 沟通的文档** → `maintenance/`
 - **代码类文档** → 对应代码包内（如 `packages/core/README.md`）
-- **代码** → `packages/` 下的三个包
+- **代码** → `packages/` 下的四个包
 
 ```
 DSLegalPlugin/
@@ -40,9 +40,15 @@ DSLegalPlugin/
 ├── maintenance/       # 非代码类文档
 └── packages/
     ├── core/          # 领域核心：数据模型、文件约定与读写、查询/分组/排序（纯逻辑，可独立发布）
-    ├── host/          # DSH host 插件：工具注册、文件访问、与 DSH 服务集成
-    └── client/        # DSH client UI：日历视图、待办视图、项目分组
+    ├── host/          # host 面实现：工具注册、文件访问、与 DSH 服务集成
+    ├── client/        # 浏览器面实现（UI 库，**不是** DSH 插件包）：日历视图、待办视图、项目分组
+    └── app/           # **唯一的 DSH 插件包** `dsh-legal-schedule`：一个包两半，两半都自足
 ```
+
+**包与插件的对应关系（2026-09-13 起）**：仓库有 4 个包，但 DSH 里**只有 1 个插件**。
+`app` 的 host 面把 `@dslegal/host`（+ core）内联，浏览器面把 `@dslegal/client-ui`（+ core）内联，
+对外只暴露一个包名——因为 DSH 插件设置列出的是 **loader 行**，而 `cordis.patch.yml` 里只有一行。
+详见 `packages/app/README.md`。
 
 ---
 
@@ -76,6 +82,9 @@ DSLegalPlugin/
 5. **接口以实查为准**：平台为 rc 版本，所有 Service / Slot / Event 以 `cordis_inspect_*` 查询到的真实签名为准，不要凭文档或记忆猜 API。
 6. **不依赖 DSH 的传递依赖**：插件装进 profile 后有自己的 node_modules，须自行声明依赖。平台服务优先用**结构化契约**声明（如 `http.ts` 的 `WebServerLike`、`settings.ts` 的 `SettingsProviderLike`），不 import 平台包：既能少一个依赖，也避免 pnpm 链接变体缺失导致 TS 找不到类型。
 7. **用户设置走 `ctx.settings`**（`$DSH_HOME/settings.yaml`，热重载），不要另建配置文件——DSH 自己的设置界面也在读写同一份文档，两处真相必然打架。接线方式：组合层配置作为 `base`、用户层覆盖；`settings` 服务缺席时退回组合层（见 `packages/host/src/settings.ts` 的 `installSettings`）。
+8. **「插件设置」列出的是 loader 行，不是包**（2026-09-13 实查）：列表来自 `dsh-host-plugin-inventory` 的 `list()`，直接遍历 `ctx.loader.entries()` 取 `entry.id`/`entry.options.name`，搜索同时匹配**完整包名与 entryId**。所以 **一行 loader = 一张卡**，`cordis.patch.yml` 里写两行就必然出现两张卡。卡片标题不是原样包名：`moduleShortName()` 会砍掉 scope 前缀与 `dsh-` / `dsh-host-` / `dsh-client-` 前缀（`@dslegal/host` → `host`；`dsh-legal-schedule` → `legal-schedule`），子标题才是 entryId。
+9. **一个包可以同时是 host 插件与 client 插件**（`package.json` 的 `dsh.client` 声明 + `exports["./client"]`），此时**只需一行** loader 条目：浏览器面被 `dsh-client-modules` 在同一行上发现，**不需要单独的 client 行**。本项目的统一包 `dsh-legal-schedule` 与平台自己的 `dsh-web-plugin-manager` 都是这个形态。**因此不要把 host 面与浏览器面拆成两个包**——拆开就是两行，插件设置里必然两张卡。
+10. **客户端插件的插件面必须声明 `inject: ['slots']`**：客户端 runner 用 `inject` 决定"这一行要不要等依赖就绪再 apply"。空数组意味着不等任何人，`apply` 会在 `slots` 提供之前跑完，而 `ctx.get('slots')` 此时是 `undefined` → 静默 `return` → **界面上连按钮都不出现、控制台一句错都不报**（2026-09-13 实测踩到）。另外**不要引用已消失的平台包**：`@deepseek-ai/dsh-client-runtime` 与 `dsh-client-ui-slots` 在 0.1.5-rc.2 已取消，`ClientContext` 直接用 `@deepseek-ai/cordis` 的 `Context`。
 
 ### 5.2 数据读写（本项目特有）
 
@@ -125,7 +134,7 @@ DSLegalPlugin/
 
 ## 8. 当前状态与关键决策
 
-**状态**：**P1–P7 已完成**——core 领域引擎 + host（10 个 `legal_*` 工具 / 扫描 / H1 类别 / 原子读写 / chokidar 监听 / `/dslegal/*` HTTP）+ client（`shell.overlay` 的「法程」面板，以三条线索组织）；**已装入 `web` profile**；共 **354 项测试**（core 106 + client 178 + host 70，含插件装配与 HTTP 端到端集成测试），typecheck、build 全通过。
+**状态**：**P1–P7 已完成**，并已于 **2026-09-13 合并为单一插件包**——core 领域引擎 + host（10 个 `legal_*` 工具 / 扫描 / H1 类别 / 原子读写 / chokidar 监听 / `/dslegal/*` HTTP）+ client（`shell.overlay` 的「法程」面板，以三条线索组织），统一由 `dsh-legal-schedule` 对外、在 DSH 里**只占一个条目**；**已装入 `web` profile**（等重启生效）；共 **363 项测试**（core 106 + client 178 + host 70 + app 9，含插件装配与 HTTP 端到端集成测试），typecheck、build 全通过。
 
 **P7 之后的十一轮修订**（2026-09-12）：①**四象限颜色可由用户在「插件设置」里自定义**；②**月历格子铺上农历 / 节气 / 中国传统节日 / 法定节假日「休 · 班」**，同时把月历格线从"每格一圈深框"改成**极浅的内部细分隔线**；③**月视图的点击粒度从"日"细化到"日程"**——点某一条日程弹它的明细悬浮窗，不跳日视图（那时"点空白"还什么都不做，**第 ⑦ 轮把它改成了"点空白 → 新建"**，但"不跳日视图"照旧）；④**「法程」启动按钮可拖动**，并修掉"侧边栏折叠后被面板盖住"；⑤**明细悬浮窗里加了切换完成状态的按钮，并复用到周视图**（周形态原先"点整条直接切状态"的手势随之取消）；⑥**项目详情改版**——待办按优先级铺成 **2×2 四象限网格**，并修掉"日程安排浮在界面上、盖住「不重要不紧急」那一组待办"的压扁 bug；⑦**点空白处新建待办 / 日程**——点各容器的空白（含标题行）弹出新建悬浮窗，"点在哪儿"决定预填的优先级与日期；⑧**新建窗的项目选择器**——项目不再写死，可搜索、可切换；⑨**使用说明改版**——默认全部折叠、点标题展开，按用户的动手顺序重排；⑩**点标题打开原始 markdown**——用系统默认程序打开工作日志并尽量跳到该行；⑪**待办条也弹明细窗**——与日程共用同一个 `DetailPopover`，点复选框只勾选、点行弹窗。详见 8.2 各小节。
 
@@ -218,17 +227,17 @@ DSLegalPlugin/
 
 **profile 安装方式**（本机限制：无全局 pnpm，且 `dsh plugin` 需要它）：
 
-- 因包间用 `workspace:*`，profile 内 pnpm 无法解析 → 采用**复制构建产物**到 `~/.dsh/profiles/web/node_modules/@dslegal/{core,host,client-ui}`（package.json + lib/）。
-- **产物必须自足**，因为这里是"复制"不是"安装"：`core/tsdown.config.ts` 里对 `lunar-javascript` 设了 `noExternal`，把它内联进 `lib/index.js`（35KB → 482KB）。否则 profile 里还得额外放一份 `node_modules/lunar-javascript`，漏了这一步的后果是 host 插件 import 期直接 `ERR_MODULE_NOT_FOUND`、插件整体加载失败、面板消失。**改构建配置后要重新核对**：`core/lib/index.js` 不应有任何 `import ... from "<第三方包>"`；`client/lib/client.js` 的 `require()` 只应出现 `react` 与 `react/jsx-runtime`。当前体量：core 482KB（gzip 123KB）、host 51KB、client 659KB（gzip 176KB）。
-- 在 `~/.dsh/profiles/web/cordis.patch.yml` 追加 `dslegal-host` 与 `dslegal-client`（`name: '@dslegal/client-ui'`）两行（`dslegal-host` 的 `config.dataRoot` 可选）；**撤销 = 恢复该文件为 `[]` 并重启 dsh**。
+- 因包间用 `workspace:*`，profile 内 pnpm 无法解析 → 采用**复制构建产物**到 `~/.dsh/profiles/web/node_modules/dsh-legal-schedule`（package.json + lib/，**一个目录就够**）。
+- **产物必须自足**，因为这里是"复制"不是"安装"：统一包的两个入口都用 `deps.alwaysBundle: [/^@dslegal\//]` 把 core / host / client-ui 全部内联。**改构建配置后要重新核对**：`app/lib/index.js` 与 `app/lib/client.js` 都不应出现任何 `@dslegal/*` 外部导入；`app/lib/client.js` 的 `require()` 只应出现 `react` 与 `react/jsx-runtime`（守卫：`packages/app/test/plugin.test.ts`）。当前体量：host 面 778KB、浏览器面 687KB（gzip 206 / 185KB）。
+- 在 `~/.dsh/profiles/web/cordis.patch.yml` 插入**一行** `dsh-legal-schedule`（浏览器面靠同一行的 `dsh.client` 声明被发现）；**撤销 = 恢复该文件为 `[]` 并重启 dsh**。
 - 演示数据：`sandbox/法律工作/诉讼案件/张三诉李四民间借贷/0. 协作/1. 工作日志.md`。
 - 排障提示：重启"不生效"时先查端口占用（`Get-NetTCPConnection -LocalPort 3080 -State Listen`）——旧 dsh 进程残留会以 `EADDRINUSE` 顶掉新进程，浏览器看到的仍是旧实例。
 
 **client 侧硬约束**（P4 实查所得，第三条为 2026-09-09 事故教训，第四、五条为界面布局实查所得，第六至八条为 P6 重构实查所得，第九至十四条为 P7 视觉重构实查所得）：
 
 - 浏览器产物必须是 `window.__ModuleLoader__.load({ id, factory: (require) => {...} })` 工厂形态（tsdown `format: cjs` + `banner`/`footer`）。
-- 产物只能 `require` shell 提供的共享模块（react / react/jsx-runtime / cordis / dsh-client-*）；`@dslegal/core` 必须内联（`noExternal`）。
-- **包名不得以 `/client` 结尾**（故更名 `@dslegal/client` → `@dslegal/client-ui`）：DSH `dsh-client-modules` 的 `stripClientSuffix` 会把 `@dslegal/client` 误削成 `@dslegal`，boot graph 行永远查不到，浏览器报 `cannot resolve "@dslegal/client" — not a row in the boot graph`，插件装配整体失败且服务器端各探针（HTML / bundle / API）全部正常，极具迷惑性。**防复发守卫**：`packages/client/test/package-name.test.ts` 断言包名不以 `/client`（或 `client`）结尾，且 banner 的 `id` 等于包名。
+- 产物只能 `require` shell 提供的共享模块（react / react/jsx-runtime / cordis / dsh-client-*）；`@dslegal/*` 必须内联——**用 `deps.alwaysBundle`（tsdown 0.23 起），不是已废弃的 `noExternal`**：后者只按裸包名匹配，带子路径的 specifier 匹配不上，产物会缩成 0.7 kB。
+- **包名不得以 `/client` 结尾**（故更名 `@dslegal/client` → `@dslegal/client-ui`）：DSH `dsh-client-modules` 的 `stripClientSuffix` 会把 `@dslegal/client` 误削成 `@dslegal`，boot graph 行永远查不到，浏览器报 `cannot resolve "@dslegal/client" — not a row in the boot graph`，插件装配整体失败且服务器端各探针（HTML / bundle / API）全部正常，极具迷惑性。**防复发守卫**：`packages/app/test/plugin.test.ts`（包名不以 `/client` 或 `client` 结尾、banner 的 `id` 等于包名、全仓库只有一个包声明 `dsh.client`、两半产物自足）。
 - **插槽会再包一层 `display: contents` 的 div**：从插件根元素找 `shell.overlay` 层必须用 `closest('[data-shell-overlay]')`，**不能用 `parentElement`**（那是包装层，其 `grid-template-columns` 为 `none`，会静默退化成兜底值——实测踩过）。会话区几何 = AppFrame 三列 grid 的轨道宽度，用 `getComputedStyle(frame).gridTemplateColumns` 读（浏览器返回已解析 px，如 `280px 976px 0px`），见 `packages/client/src/shell.ts`；工作台面板据此铺满会话区（`left` = 侧边栏宽、`right` = 详情栏宽）。**启动按钮常驻**、不做关闭按钮：点击即开合（`aria-expanded` 反映状态），**按住可以拖动**（落点存 `localStorage`；开合仍走 `onClick`，所以键盘 Enter/空格可用，拖动收尾的那次 `click` 被吞掉），默认位置锚定到侧边栏底部设置按钮（右边缘对齐、部分重叠），**拖回原处即恢复默认、重新跟随侧边栏**；**点左侧会话菜单栏任意位置也收起面板**（侧边栏是别的插件的 DOM、面板又不覆盖它，故在 document **捕获阶段**监听 `pointerdown` 做命中判断，见 `sidebarColumnOf`）。**防复发守卫**：`packages/client/test/shell.test.ts`。
 - **重测不能用 rAF 合并**：`requestAnimationFrame` 在**被遮挡/后台的标签页里不触发**，把测量放进 rAF 会让几何永久停在旧值（实测踩过）。改法是同步测量 + 三条触发源：`MutationObserver` 盯 frame 的行内 `style`（侧边栏拖动/详情栏开合都改这一行，且它是微任务，后台标签页也触发）、`ResizeObserver` 盯 frame 与三列（视口变化引起的轨道重排）、`resize` / `visibilitychange` 兜底。`useShellGeometry`（面板几何）与 `useBoxHeight`（四象限"能放几行"）都遵守这一条。
 - **四个等面积象限靠网格、不靠内容**：`grid-template-rows/columns: repeat(2, minmax(0,1fr))` 撑出四个恒等区域，象限内容区必须 `flex:1 + minHeight:0 + overflow:hidden`。**少了 `minHeight:0`，条目会把容器顶高**，"能容纳几条"就随内容自激（越显示越长、越长越能显示）。容量 = `floor(内容区高度 / 固定行高)`（行高 26px，见 `styles.ts` 的 `TODO_ROW_HEIGHT`）。**防复发守卫**：`packages/client/test/layout.test.ts`。

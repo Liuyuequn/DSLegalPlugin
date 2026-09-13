@@ -2023,9 +2023,9 @@ export function HelpView(props: {
 }): JSX.Element {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   return (
-    <div data-fl="help-overlay" style={UI.helpOverlay} role="dialog" aria-label="法程使用说明">
+    <div data-fl="help-overlay" style={UI.helpOverlay} role="dialog" aria-label="使用说明">
       <header style={UI.topBar}>
-        <span style={UI.sectionTitle}>法程 · 使用说明</span>
+        <span style={UI.sectionTitle}>使用说明</span>
         <span style={{ flex: 1 }} />
         <button
           type="button"

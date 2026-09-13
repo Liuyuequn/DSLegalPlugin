@@ -1,13 +1,23 @@
 {
-  "name": "@dslegal/client-ui",
+  "name": "dsh-legal-schedule",
   "version": "0.0.0",
-  "description": "DSLegalPlugin 的浏览器侧 UI 库：日历视图、待办视图、项目分组（由 dsh-legal-schedule 内联，自身不是 DSH 插件包）",
+  "description": "DSLegalPlugin 的对外统一包：一个包同时提供 host 面（legal_* 工具与 /dslegal/* HTTP）与浏览器面（「法程」工作台面板），因此在 DSH 插件设置里只占一个条目。",
   "type": "module",
+  "main": "lib/index.js",
   "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
     "./client": {
       "default": "./lib/client.js"
     },
     "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "inject": ["@deepseek-ai/dsh-client-ui-layout"],
+      "platform": "web"
+    }
   },
   "files": [
     "lib"
@@ -18,7 +28,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@dslegal/core": "workspace:*"
+    "@dslegal/client-ui": "workspace:*",
+    "@dslegal/core": "workspace:*",
+    "@dslegal/host": "workspace:*"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",

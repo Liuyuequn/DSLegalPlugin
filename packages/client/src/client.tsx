@@ -24,7 +24,17 @@
  * 「法程」启动按钮常驻在侧边栏底部、与设置按钮部分重叠，点击即开合。
  */
 
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+/**
+ * `ClientContext` 就是 cordis 的 `Context`（平台自己的客户端插件也这么标：
+ * `dsh-client-ui-layout` 的 `.d.ts` 里写的是
+ * `import type { Context as ClientContext } from '@deepseek-ai/cordis'`）。
+ *
+ * 原先这里 import 的是 `@deepseek-ai/dsh-client-runtime/client`——那个包在
+ * DSH 0.1.5-rc.2 已经不存在（`dsh-client-*` 里没有它，`ui-slots` 也一并取消），
+ * 只在升级遗留的共享 `node_modules` 里剩一份残骸。**别再引它**：跟着平台的
+ * 客户端插件走 cordis，这也是运行时唯一真正提供的依赖（见包内 peerDependencies）。
+ */
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import { PRIORITY_COLORS, type Priority } from '@dslegal/core'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react'
 
@@ -84,7 +94,27 @@ import {
 
 export const name = 'dslegal-client'
 
-export const inject: string[] = []
+/**
+ * 声明的服务：**必须含 `slots`**，否则这个插件永远不会出现在界面上。
+ *
+ * DSH 的客户端 runner 用 `inject` 决定"这一行要不要等依赖就绪再 apply"：
+ * 声明了 `slots`，provider 缺席/卸载时整行会被**暂停（park）**，等 `slots`
+ * 到位再 apply；声明为空数组则**不等任何人**，`apply` 会在 `slots` 还没提供
+ * 的时候跑完。
+ *
+ * 而 `apply` 里是 `const slots = ctx.get('slots'); if (slots === undefined) return`——
+ * 于是那一次早跑就静默退化成"什么都没注册"，插槽里永远不会有条目，
+ * **界面上连按钮都不会出现，控制台也不报错**（2026-09-13 升级 DSH 后实测踩到）。
+ *
+ * `shell.overlay` 还是**延迟注入**的插槽（`slots.inject(slot, cb)`：提供者后到再回调），
+ * 多一层"要等"的语义，更不该抢跑。同类的客户端插件（`dsh-web-plugin-manager`）
+ * 也是 `inject: ['slots', 'locale', …]`；平台自己的 `dsh-client-ui-layout`
+ * （就是注册 `shell.overlay` 那个）写的是 `inject: ["slots", "theme", "locale"]`。
+ *
+ * **待补守卫**：目前没有测试断言这个数组非空——`packages/client/test/` 里现有守卫
+ * 都跑在 Node 环境，看不到"插件有没有被运行"。要防复发得加一条源码扫描断言。
+ */
+export const inject: string[] = ['slots']
 
 const OVERLAY_SLOT = 'shell.overlay'
 
