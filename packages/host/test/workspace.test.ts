@@ -204,6 +204,70 @@ describe('scanProjects（另行指定的类型目录 / 项目目录）', () => {
   })
 })
 
+describe('scanProjects（根目录下未在映射里的子文件夹：结构补判）', () => {
+  /**
+   * 规则（2026-09-15 用户定下）：名称不在映射里的子文件夹，**只有当它下面存在符合项目目录
+   * 形式规则的子文件夹**（`<子>/0. 协作/1. 工作日志.md` 是文件）时才算类型目录；认出来之后
+   * **不限类别**，且它其余的子文件夹**不进** `incomplete`。
+   */
+  it('其下有合格的项目目录 → 认作类型目录，且不限类别', async () => {
+    await makeProjectAt(join(root, '自家分类'), '自家案件', '# 工作日志_刑事')
+
+    const result = await scanAt()
+    expect(result.projects.map((item) => item.project)).toEqual(['自家案件'])
+    const item = result.projects[0]!
+    expect(item.typeDir).toBe('自家分类')
+    expect(item.typeDirPath).toBe(join(root, '自家分类'))
+    expect(item.allowedCategories).toEqual([...SERVICE_CATEGORIES])
+    // 不限类别 = 「刑事」放在「自家分类」下不算"类别与目录不符"。
+    expect(item.categoryIssue).toBeNull()
+  })
+
+  it('其下没有合格的项目目录 → 完全不扫，也不报 incomplete', async () => {
+    await makeProjectAt(join(root, '归档'), '旧案', '', false) // 缺工作日志
+    await mkdir(join(root, '草稿'), { recursive: true }) // 空目录
+
+    const result = await scanAt()
+    expect(result.projects).toEqual([])
+    expect(result.incomplete).toEqual([])
+  })
+
+  it('自动认出来的类型目录：其余子文件夹静默跳过；映射里的照旧如实报出', async () => {
+    await makeProjectAt(join(root, '自家分类'), '合格案件')
+    await makeProjectAt(join(root, '自家分类'), '材料堆', '', false)
+    await makeProject('诉讼案件', '映射内的合格案件')
+    await makeProject('诉讼案件', '映射内的缺日志', '', false)
+
+    const result = await scanAt()
+    expect(result.projects.map((item) => item.project).sort()).toEqual([
+      '合格案件',
+      '映射内的合格案件',
+    ])
+    // 关键这条：只有**映射里**那个类型目录的缺日志目录被报出来。
+    expect(result.incomplete.map((item) => item.project)).toEqual(['映射内的缺日志'])
+    expect(result.incomplete[0]?.typeDir).toBe('诉讼案件')
+  })
+
+  it('根目录下的案件文件夹本身不会被误判成类型目录（反向保护）', async () => {
+    await makeProject('诉讼案件', '案件甲')
+    // `案件乙` 是"项目目录本身"被放在根目录下：它下面只有 `0. 协作`，
+    // 没有 `<子>/0. 协作/1. 工作日志.md` —— 补判不该把它认成类型目录。
+    await makeProjectAt(root, '案件乙')
+
+    const result = await scanAt()
+    expect(result.projects.map((item) => item.project)).toEqual(['案件甲'])
+    expect(result.incomplete).toEqual([])
+  })
+
+  it('结构补判只认一层：更深的嵌套不会把上层认成类型目录', async () => {
+    await makeProjectAt(join(root, '外层', '中层'), '太深了')
+
+    const result = await scanAt()
+    expect(result.projects).toEqual([])
+    expect(result.incomplete).toEqual([])
+  })
+})
+
 describe('findProject / isAmbiguous', () => {
   it('唯一项目名可直接定位；重名需 typeDir 消歧', async () => {
     await makeProject('诉讼案件', '同名项目')
