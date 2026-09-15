@@ -261,6 +261,9 @@ function localKey(date: Date): string {
  * 三级目录（根目录 / 类型目录 / 项目目录）**一个都没设定**时返回 `configured: false`，
  * 界面据此改显目录设置表单；**颜色与目录无关，任何情况下都下发**——否则界面连"配色"
  * 这一块都画不出来。
+ *
+ * `hierarchyIssues` 是**违反目录层级、因而被忽略**的项：保存时的违规会被直接拒绝（400），
+ * 所以这里非空只可能是组合层配置或手工改过的 `settings.yaml`——界面据此如实说明。
  */
 async function buildSettings(deps: LegalDeps): Promise<Record<string, unknown>> {
   const { colors, issues } = deps.getPriorityColors()
@@ -269,6 +272,7 @@ async function buildSettings(deps: LegalDeps): Promise<Record<string, unknown>> 
     priorityColors: colors,
     defaultPriorityColors: PRIORITY_COLORS,
     colorIssues: issues,
+    hierarchyIssues: [...deps.getHierarchyIssues()],
   }
   if (!isConfigured(paths)) {
     return {

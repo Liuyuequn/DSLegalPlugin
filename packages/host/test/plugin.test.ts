@@ -28,6 +28,8 @@ interface Harness {
   readonly tools: Map<string, { name: string; execute: (args: unknown) => Promise<unknown> }>
   readonly request: (method: string, url: string, body?: unknown) => Promise<{ status: number; body: any }>
   readonly route: () => WebRouteLike
+  /** 插件记下的警告（目录层级违规只会从这条路暴露出来——不能静默）。 */
+  readonly warnings: readonly string[]
   /** 执行插件注册的 effect disposer（关闭文件监听），避免临时目录被删除后仍持有句柄。 */
   readonly dispose: () => void
 }
@@ -75,6 +77,7 @@ function makeSettings(
 function makeHarness(settings?: unknown): Harness {
   const tools = new Map<string, { name: string; execute: (args: unknown) => Promise<unknown> }>()
   const disposers: (() => void)[] = []
+  const warnings: string[] = []
   let route: WebRouteLike | null = null
 
   const webServer: WebServerLike = {
@@ -87,6 +90,14 @@ function makeHarness(settings?: unknown): Harness {
   }
 
   const ctx = {
+    logger: {
+      warn(message: string) {
+        warnings.push(message)
+      },
+      error(message: string) {
+        warnings.push(message)
+      },
+    },
     tools: {
       register(definition: { name: string; execute: (args: unknown) => Promise<unknown> }) {
         tools.set(definition.name, definition)
@@ -119,6 +130,7 @@ function makeHarness(settings?: unknown): Harness {
     ctx,
     tools,
     route: routeOf,
+    warnings,
     dispose() {
       for (const disposer of disposers) disposer()
       disposers.length = 0
@@ -734,6 +746,51 @@ describe('三级目录各自独立', () => {
       (item) => item.project === '单列案件',
     )
     expect(row?.typeDir).toBe('散装')
+  })
+
+  it('根目录之下不能直接指定项目目录：保存被拒（400）且不落盘', async () => {
+    // 在根目录下直接造一个"合格的案件文件夹"——层级上它是**放错位置**的项目目录。
+    const misplaced = join(root, '放错层级的案件')
+    await mkdir(join(misplaced, COLLAB_DIR), { recursive: true })
+    await writeFile(join(misplaced, COLLAB_DIR, WORK_LOG_FILE), '# 工作日志_民事\n', 'utf8')
+
+    const { status, body } = await harness.request('POST', '/dslegal/settings', {
+      extraProjectDirs: [misplaced],
+    })
+    expect(status).toBe(400)
+    expect(String(body.error)).toContain('根目录之下只能是类型目录')
+
+    const reread = await harness.request('GET', '/dslegal/settings')
+    expect(reread.body.extraProjectDirs).toEqual([])
+    // 它也不会被当成项目冒出来：根目录扫描只在**下一层**找类型目录，这一层放错的东西不扫。
+    const projects = await harness.request('GET', '/dslegal/projects')
+    expect((projects.body.projects as { project: string }[]).map((item) => item.project)).not.toContain(
+      '放错层级的案件',
+    )
+  })
+
+  it('配置里违反层级的项被忽略，并随 /dslegal/settings 如实下发（不静默）', async () => {
+    const misplaced = join(root, '放错层级的案件')
+    await mkdir(join(misplaced, COLLAB_DIR), { recursive: true })
+    await writeFile(join(misplaced, COLLAB_DIR, WORK_LOG_FILE), '# 工作日志_民事\n', 'utf8')
+
+    // 模拟"用户手工改了 settings.yaml"：绕过保存时的校验，直接把它塞进用户层。
+    const custom = makeSettings({ rootDir: root, extraProjectDirs: [misplaced] })
+    const customHarness = makeHarness(custom.provider)
+    apply(customHarness.ctx as Parameters<typeof apply>[0], {
+      rootDir: root,
+      debounceMs: 20,
+      echoWindowMs: 20,
+    })
+    try {
+      const { body } = await customHarness.request('GET', '/dslegal/settings')
+      expect(body.extraProjectDirs).toEqual([])
+      expect(String(body.hierarchyIssues?.[0])).toContain('根目录之下只能是类型目录')
+      // 同时留一条日志——运行期没法把配置打回去，但绝不能静默。
+      expect(customHarness.warnings.join('\n')).toContain('目录层级检查未通过')
+    } finally {
+      customHarness.dispose()
+    }
   })
 
   it('部分保存：改根目录不会抹掉另行指定的目录', async () => {

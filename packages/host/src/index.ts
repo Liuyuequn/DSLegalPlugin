@@ -36,7 +36,7 @@ import {
 import { readWorkLog, writeWorkLog } from './store.js'
 import { registerTools } from './tools.js'
 import { createWorkLogWatcher } from './watcher.js'
-import { scanProjects, type ScanResult } from './workspace.js'
+import { checkHierarchy, scanProjects, type ScanResult } from './workspace.js'
 
 declare module '@deepseek-ai/cordis' {
   interface Events {
@@ -128,12 +128,40 @@ export function apply(ctx: Context, config: HostConfig): void {
     extraProjectDirs: config.extraProjectDirs,
   })
 
-  /** 用户设置 → 三级目录（旧键 `dataRoot` 在这里兜底成根目录）。 */
-  const settingsPaths = (settings: LegalSettings): ResolvedPaths => ({
-    rootDir: effectiveRootDir(settings) ?? null,
-    extraTypeDirs: normalizeDirList(settings.extraTypeDirs),
-    extraProjectDirs: normalizeDirList(settings.extraProjectDirs),
-  })
+  /**
+   * 违反目录层级、因而被忽略掉的项（见 `workspace.ts` 的 `checkHierarchy`）。
+   *
+   * 保存时的违规由 `setPaths` 直接拒绝；这里留的是**组合层配置 / 手工改过的 settings.yaml**
+   * 那一类"当场没法报错"的情况，`/dslegal/settings` 会把它带回界面，不静默。
+   */
+  let hierarchyIssues: readonly string[] = []
+
+  /**
+   * 用户设置 → 三级目录（旧键 `dataRoot` 在这里兜底成根目录）。
+   *
+   * **目录层级在这里强制执行**：位置不合法的「另行指定」被剔除，原因记进 `hierarchyIssues`
+   * 并写一条日志。运行期不允许出现非法状态——否则"根目录下直接挂一个项目目录"这种设定
+   * 会真的生效，规则就成了摆设。
+   */
+  const settingsPaths = (settings: LegalSettings): ResolvedPaths => {
+    const raw: ResolvedPaths = {
+      rootDir: effectiveRootDir(settings) ?? null,
+      extraTypeDirs: normalizeDirList(settings.extraTypeDirs),
+      extraProjectDirs: normalizeDirList(settings.extraProjectDirs),
+    }
+    const checked = checkHierarchy(raw)
+    hierarchyIssues = checked.issues
+    if (checked.issues.length > 0) {
+      // 测试替身没有 logger，所以走可选调用；真实 profile 里一定有。
+      const logger = (ctx as { logger?: { warn?: (message: string) => void } }).logger
+      logger?.warn?.(`[dslegal] 目录层级检查未通过，已忽略违规项：\n${checked.issues.join('\n')}`)
+    }
+    return {
+      ...raw,
+      extraTypeDirs: [...checked.extraTypeDirs],
+      extraProjectDirs: [...checked.extraProjectDirs],
+    }
+  }
 
   // 用户设置优先于组合层配置；settings 服务缺席时自动退回组合层。
   installSettings(
@@ -169,6 +197,7 @@ export function apply(ctx: Context, config: HostConfig): void {
       watcher.markSelfWrite(path)
     },
     getPaths: () => paths,
+    getHierarchyIssues: () => hierarchyIssues,
     setPaths: async (patch) => {
       const settings = ctx.get('settings') as SettingsProviderLike | undefined
       if (settings === undefined) {
@@ -211,13 +240,20 @@ export function apply(ctx: Context, config: HostConfig): void {
         throw new Error('缺少要保存的设置项（rootDir / extraTypeDirs / extraProjectDirs）。')
       }
 
-      await settings.update(SETTINGS_NS, update)
-      // 立即生效，不等 watch 回调（watch 是异步的，界面要拿到确定结果）。
-      const next: ResolvedPaths = {
+      // **层级校验在落盘之前**：拿"这次改完之后"的三级目录整体去校验（部分保存语义下，
+      // 单看这次传进来的那一项看不出层级关系）。不通过就整张表单都不落盘，界面拿到的
+      // 400 里是逐条原因。
+      const pending: ResolvedPaths = {
         rootDir: nextRoot,
         extraTypeDirs: nextExtraTypeDirs,
         extraProjectDirs: nextExtraProjectDirs,
       }
+      const hierarchy = checkHierarchy(pending)
+      if (hierarchy.issues.length > 0) throw new Error(hierarchy.issues.join('\n'))
+
+      await settings.update(SETTINGS_NS, update)
+      // 立即生效，不等 watch 回调（watch 是异步的，界面要拿到确定结果）。
+      const next = pending
       await applyPaths(next)
       if (!isConfigured(next)) return { ...next, projectCount: 0, incompleteCount: 0 }
       const { projects, incomplete } = await scan(true)

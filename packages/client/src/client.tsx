@@ -379,6 +379,13 @@ function Workbench(): JSX.Element {
     readonly extraProjectDirs: string
   }>(() => ({ rootDir: '', extraTypeDirs: '', extraProjectDirs: '' }))
   const [pathError, setPathError] = useState<string | null>(null)
+  /**
+   * 违反目录层级、**已被 host 忽略**的项（逐条原因）。
+   *
+   * 保存时的违规由 host 直接 400，原因走 `pathError`；这一份说的是"当前生效的配置里有哪一条
+   * 被丢掉了"——只会来自组合层配置或手工改过的 `settings.yaml`。不静默是硬要求。
+   */
+  const [hierarchyIssues, setHierarchyIssues] = useState<readonly string[]>([])
   const [saving, setSaving] = useState(false)
   /**
    * 四象限颜色的草稿。
@@ -611,6 +618,8 @@ function Workbench(): JSX.Element {
       const settings = await getSettings()
       if (settings.priorityColors !== undefined) setColorDraft(settings.priorityColors)
       setDefaultColors(settings.defaultPriorityColors ?? null)
+      // 违反层级、已被忽略的项：旧 host 没这个字段 → 空数组（不报警）。
+      setHierarchyIssues(settings.hierarchyIssues ?? [])
       // 逐字段判：旧 host 的响应里这些键根本不存在，覆盖上去就是"把用户配好的目录清空"。
       setDirDraft((draft) => ({
         rootDir: settings.rootDir === undefined || settings.rootDir === null ? draft.rootDir : settings.rootDir,
@@ -1161,6 +1170,7 @@ function Workbench(): JSX.Element {
                 extraTypeDirs={dirDraft.extraTypeDirs}
                 extraProjectDirs={dirDraft.extraProjectDirs}
                 error={pathError}
+                hierarchyIssues={hierarchyIssues}
                 saving={saving}
                 configUnset={!configured}
                 canCancel={rootDir !== null}

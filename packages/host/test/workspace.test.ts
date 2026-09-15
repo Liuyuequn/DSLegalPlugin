@@ -1,11 +1,12 @@
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 import { COLLAB_DIR, WORK_LOG_FILE } from '@dslegal/core'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import {
+  checkHierarchy,
   findProject,
   isAmbiguous,
   scanProjects,
@@ -246,6 +247,135 @@ describe('scanProjects（类型目录只按结构推定，名称不参与判定�
     const result = await scanAt()
     expect(result.projects).toEqual([])
     expect(result.incomplete).toEqual([])
+  })
+})
+
+describe('checkHierarchy（强制目录层级契约）', () => {
+  /**
+   * 允许的形状只有三种：`<根>/<类型>/<项目>`、根目录之外独立的类型目录、根目录之外独立的
+   * 项目目录。位置不对的「另行指定」一律拒绝（保存时 400；组合层 / 手工配置则忽略并记下来）。
+   */
+  it('根目录之外独立存在的类型目录 / 项目目录：放行', () => {
+    const typeDir = join(outside, '自家分类')
+    const projectDir = join(outside, '散装', '单列案件')
+    const checked = checkHierarchy({
+      rootDir: root,
+      extraTypeDirs: [typeDir],
+      extraProjectDirs: [projectDir],
+    })
+    expect(checked.issues).toEqual([])
+    expect(checked.extraTypeDirs).toEqual([typeDir])
+    expect(checked.extraProjectDirs).toEqual([projectDir])
+  })
+
+  it('项目目录位于某个类型目录之下（根目录之外）：放行', () => {
+    const typeDir = join(outside, '自家分类')
+    const checked = checkHierarchy({
+      rootDir: root,
+      extraTypeDirs: [typeDir],
+      extraProjectDirs: [join(typeDir, '案件甲')],
+    })
+    expect(checked.issues).toEqual([])
+  })
+
+  it('根目录之内的类型目录（直接子文件夹）与其下的项目目录：放行', () => {
+    const checked = checkHierarchy({
+      rootDir: root,
+      extraTypeDirs: [join(root, '诉讼案件')],
+      extraProjectDirs: [join(root, '诉讼案件', '张三诉李四')],
+    })
+    expect(checked.issues).toEqual([])
+  })
+
+  it('根目录之下不能直接指定项目目录：拒绝并剔除该项', () => {
+    const projectDir = join(root, '张三诉李四')
+    const checked = checkHierarchy({
+      rootDir: root,
+      extraTypeDirs: [],
+      extraProjectDirs: [projectDir],
+    })
+    expect(checked.issues).toHaveLength(1)
+    expect(checked.issues[0]).toContain('根目录之下只能是类型目录')
+    expect(checked.issues[0]).toContain(projectDir)
+    expect(checked.extraProjectDirs).toEqual([])
+  })
+
+  it('根目录之内的类型目录只能是直接子文件夹', () => {
+    const nested = join(root, '诉讼案件', '子分类')
+    const checked = checkHierarchy({ rootDir: root, extraTypeDirs: [nested], extraProjectDirs: [] })
+    expect(checked.issues[0]).toContain('只能是根目录的直接子文件夹')
+    expect(checked.extraTypeDirs).toEqual([])
+  })
+
+  it('类型目录之间不得嵌套：剔除被嵌套的那一个，外层保留', () => {
+    const outer = join(outside, '外层')
+    const inner = join(outer, '内层')
+    const checked = checkHierarchy({
+      rootDir: null,
+      extraTypeDirs: [outer, inner],
+      extraProjectDirs: [],
+    })
+    expect(checked.issues[0]).toContain('不能嵌套在另一个类型目录里')
+    expect(checked.extraTypeDirs).toEqual([outer])
+  })
+
+  it('项目目录之内不能再有类型目录（类型目录被剔除，项目目录本身保留）', () => {
+    const projectDir = join(outside, '案件甲')
+    const checked = checkHierarchy({
+      rootDir: null,
+      extraTypeDirs: [join(projectDir, '子分类')],
+      extraProjectDirs: [projectDir],
+    })
+    expect(checked.issues.join('\n')).toContain('不能位于项目目录之内')
+    expect(checked.extraTypeDirs).toEqual([])
+    expect(checked.extraProjectDirs).toEqual([projectDir])
+  })
+
+  it('项目目录之间不得嵌套', () => {
+    const outer = join(outside, '案件甲')
+    const checked = checkHierarchy({
+      rootDir: null,
+      extraTypeDirs: [],
+      extraProjectDirs: [outer, join(outer, '子目录')],
+    })
+    expect(checked.issues.join('\n')).toContain('不能嵌套在另一个项目目录里')
+    expect(checked.extraProjectDirs).toEqual([outer])
+  })
+
+  it('根目录只能有一个：与它重合、或把它装在里面，都不允许', () => {
+    const same = checkHierarchy({ rootDir: root, extraTypeDirs: [root], extraProjectDirs: [] })
+    expect(same.issues[0]).toContain('根目录只能有一个')
+    expect(same.extraTypeDirs).toEqual([])
+
+    const covering = checkHierarchy({
+      rootDir: root,
+      extraTypeDirs: [dirname(root)],
+      extraProjectDirs: [],
+    })
+    expect(covering.issues[0]).toContain('根目录只能有一个')
+    expect(covering.extraTypeDirs).toEqual([])
+  })
+
+  it('同一个文件夹不能既是类型目录又是项目目录', () => {
+    const both = join(outside, '自家分类')
+    const checked = checkHierarchy({
+      rootDir: null,
+      extraTypeDirs: [both],
+      extraProjectDirs: [both],
+    })
+    expect(checked.issues[0]).toContain('不能既是类型目录又是项目目录')
+    expect(checked.extraTypeDirs).toEqual([])
+    expect(checked.extraProjectDirs).toEqual([])
+  })
+
+  it.runIf(process.platform === 'win32')('Windows 上大小写不敏感：换个写法照样判出违规', () => {
+    const checked = checkHierarchy({
+      rootDir: root.toUpperCase(),
+      extraTypeDirs: [],
+      extraProjectDirs: [join(root, '张三诉李四')],
+    })
+    expect(checked.issues).toHaveLength(1)
+    expect(checked.extraProjectDirs).toEqual([])
   })
 })
 

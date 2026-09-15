@@ -23,7 +23,7 @@
  */
 
 import { readFile, readdir, stat } from 'node:fs/promises'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
 import {
   COLLAB_DIR,
@@ -197,6 +197,173 @@ async function collectTypeDir(
       reportIncomplete,
       sink,
     )
+  }
+}
+
+/**
+ * 目录层级契约（2026-09-15 用户要求"强制规范目录层级结构"）。
+ *
+ * 允许的形状只有三种：
+ *
+ * ```
+ * <根目录>/<类型目录>/<项目目录>/0. 协作/1. 工作日志.md     ← 根目录之内的三层，唯一合法形状
+ * <另行的类型目录>/<项目目录>/0. 协作/1. 工作日志.md        ← 根目录之外的独立类型目录
+ * <另行的项目目录>/0. 协作/1. 工作日志.md                   ← 根目录之外的独立项目目录
+ * ```
+ *
+ * 由此推出五条判定：
+ * 1. **根目录只能有一个**，且它在最上层：任何「另行指定」都不得与根目录重合、也不得把根目录装在里面。
+ * 2. **根目录之下只能是类型目录**：不能把根目录的直接子文件夹指定成项目目录。
+ * 3. **类型目录之下只能是项目目录**：类型目录之间不得互相嵌套。
+ * 4. **项目目录之下不能再有类型目录 / 项目目录**。
+ * 5. 落在**根目录之内**的「另行指定」必须正好落在它该在的那一层：类型目录必须是根目录的
+ *    直接子文件夹，项目目录必须位于某个直接子文件夹之下（即 `<根>/<类型目录>/<项目目录>`）。
+ *
+ * 位置不合法的项**不生效**：保存时直接拒绝（界面里红字说明原因），组合层配置或手工改过的
+ * `settings.yaml` 则忽略该项并把原因记下来（`/dslegal/settings` 会带回界面）。
+ */
+export interface HierarchyInput {
+  readonly rootDir: string | null
+  readonly extraTypeDirs: readonly string[]
+  readonly extraProjectDirs: readonly string[]
+}
+
+export interface HierarchyCheck {
+  /** 违反层级的原因，每条都已指出具体路径；正常为空数组。 */
+  readonly issues: readonly string[]
+  /** 剔除违规项之后的两张清单（顺序不变）。 */
+  readonly extraTypeDirs: readonly string[]
+  readonly extraProjectDirs: readonly string[]
+}
+
+/** 路径比较键：Windows 上大小写不敏感。 */
+function compareKey(path: string): string {
+  const abs = resolve(path)
+  return process.platform === 'win32' ? abs.toLowerCase() : abs
+}
+
+/** `child` 是否**严格**位于 `parent` 之下（相等不算）。 */
+function isUnder(child: string, parent: string): boolean {
+  const rel = relative(compareKey(parent), compareKey(child))
+  return rel.length > 0 && !rel.startsWith('..') && !isAbsolute(rel)
+}
+
+/** `child` 相对 `parent` 的层数（1 = 直接子级）；不在其下时为 0。 */
+function depthUnder(child: string, parent: string): number {
+  const rel = relative(compareKey(parent), compareKey(child))
+  if (rel.length === 0 || rel.startsWith('..') || isAbsolute(rel)) return 0
+  return rel.split(/[\\/]+/).filter((part) => part.length > 0).length
+}
+
+/** 检查三级目录的层级关系；返回违规原因与剔除违规项之后的清单。 */
+export function checkHierarchy(input: HierarchyInput): HierarchyCheck {
+  const issues: string[] = []
+  const root = input.rootDir === null ? null : resolve(input.rootDir)
+  const dropTypeDir = new Set<string>()
+  const dropProjectDir = new Set<string>()
+  const types = input.extraTypeDirs
+  const projects = input.extraProjectDirs
+
+  // ① 根目录唯一且在最上层。
+  if (root !== null) {
+    for (const dir of types) {
+      if (compareKey(dir) === compareKey(root) || isUnder(root, dir)) {
+        issues.push(
+          `「另行指定的类型目录」${dir} 与根目录 ${root} 的位置冲突：根目录只能有一个、且必须在类型目录之上。已忽略该项。`,
+        )
+        dropTypeDir.add(compareKey(dir))
+      }
+    }
+    for (const dir of projects) {
+      if (compareKey(dir) === compareKey(root) || isUnder(root, dir)) {
+        issues.push(
+          `「另行指定的项目目录」${dir} 与根目录 ${root} 的位置冲突：根目录只能有一个、且必须在项目目录之上。已忽略该项。`,
+        )
+        dropProjectDir.add(compareKey(dir))
+      }
+    }
+  }
+
+  // ② 类型目录之间不得嵌套（类型目录之下只能是项目目录）。
+  for (const inner of types) {
+    for (const outer of types) {
+      if (compareKey(inner) === compareKey(outer)) continue
+      if (isUnder(inner, outer)) {
+        issues.push(
+          `「另行指定的类型目录」不能嵌套在另一个类型目录里：${inner} 位于 ${outer} 之下。类型目录之下只能是项目目录。已忽略 ${inner}。`,
+        )
+        dropTypeDir.add(compareKey(inner))
+      }
+    }
+  }
+
+  // ③ 项目目录之内不能再有类型目录或项目目录。
+  for (const project of projects) {
+    for (const typeDir of types) {
+      if (isUnder(typeDir, project)) {
+        issues.push(
+          `「另行指定的类型目录」不能位于项目目录之内：${typeDir} 位于 ${project} 之下。已忽略 ${typeDir}。`,
+        )
+        dropTypeDir.add(compareKey(typeDir))
+      }
+    }
+    for (const outer of projects) {
+      if (compareKey(project) === compareKey(outer)) continue
+      if (isUnder(project, outer)) {
+        issues.push(
+          `「另行指定的项目目录」不能嵌套在另一个项目目录里：${project} 位于 ${outer} 之下。已忽略 ${project}。`,
+        )
+        dropProjectDir.add(compareKey(project))
+      }
+    }
+  }
+
+  // ④ 同一个文件夹不能既是类型目录又是项目目录。
+  for (const typeDir of types) {
+    for (const project of projects) {
+      if (compareKey(typeDir) === compareKey(project)) {
+        issues.push(
+          `同一个文件夹不能既是类型目录又是项目目录：${typeDir}。两张清单里的这一项都已忽略。`,
+        )
+        dropTypeDir.add(compareKey(typeDir))
+        dropProjectDir.add(compareKey(project))
+      }
+    }
+  }
+
+  // ⑤ 落在根目录之内的「另行指定」，层数必须正好。
+  if (root !== null) {
+    for (const dir of types) {
+      if (!isUnder(dir, root)) continue
+      const depth = depthUnder(dir, root)
+      if (depth !== 1) {
+        issues.push(
+          `位于根目录之内的「另行指定的类型目录」只能是根目录的直接子文件夹：${dir} 在根目录之下第 ${depth} 层。已忽略该项。`,
+        )
+        dropTypeDir.add(compareKey(dir))
+      }
+    }
+    for (const dir of projects) {
+      if (!isUnder(dir, root)) continue
+      const depth = depthUnder(dir, root)
+      if (depth === 1) {
+        issues.push(
+          `根目录之下只能是类型目录，不能直接把项目目录设在根目录下：${dir}。请把案件文件夹移到某个类型目录之下，或者把它放到根目录之外再另行指定。已忽略该项。`,
+        )
+        dropProjectDir.add(compareKey(dir))
+      } else if (depth !== 2) {
+        issues.push(
+          `位于根目录之内的「另行指定的项目目录」必须正好落在某个直接子文件夹之下（<根目录>/<类型目录>/<项目目录>）：${dir} 在根目录之下第 ${depth} 层。已忽略该项。`,
+        )
+        dropProjectDir.add(compareKey(dir))
+      }
+    }
+  }
+
+  return {
+    issues,
+    extraTypeDirs: types.filter((dir) => !dropTypeDir.has(compareKey(dir))),
+    extraProjectDirs: projects.filter((dir) => !dropProjectDir.has(compareKey(dir))),
   }
 }
 

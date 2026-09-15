@@ -85,6 +85,13 @@ export interface LegalDeps {
   readonly markSelfWrite: (path: string) => void
   /** 当前生效的三级目录。 */
   readonly getPaths: () => ResolvedPaths
+  /**
+   * 当前生效配置里**违反目录层级**、因而被忽略掉的项（正常为空数组）。
+   *
+   * 保存时的违规会被直接拒绝（400），所以这里出现的只可能是**组合层配置**或**用户手工改过的
+   * `settings.yaml`**——那两条路径没法当场报错，只能在运行时忽略 + 把原因带回界面。
+   */
+  readonly getHierarchyIssues: () => readonly string[]
   /** 校验并保存目录设置（写入用户设置），随即生效并重新扫描。 */
   readonly setPaths: (patch: PathsPatch) => Promise<PathsUpdate>
   /**

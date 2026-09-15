@@ -135,6 +135,14 @@ export interface SettingsView extends DirFields {
   readonly configured: boolean
   readonly projectCount: number
   readonly incompleteCount: number
+  /**
+   * **违反目录层级、因而被忽略**的项（逐条给出原因）。
+   *
+   * 保存时的违规 host 会直接 400（原因走 `pathError`），所以这里非空只可能是组合层配置
+   * 或用户手工改过的 `settings.yaml`——界面照旧要如实说出来，"你写的哪一条没生效、为什么"。
+   * 旧 host 不下发这个字段，故为可选。
+   */
+  readonly hierarchyIssues?: readonly string[]
   /** 当前生效的四个颜色。 */
   readonly priorityColors: Record<Priority, string>
   /** 出厂默认色，供「恢复默认」用。 */
