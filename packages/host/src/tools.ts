@@ -218,7 +218,6 @@ export function registerTools(ctx: Context, deps: ToolDeps): void {
             const row: JsonObject = {
               project: item.project,
               typeDir: item.typeDir,
-              allowedCategories: [...item.allowedCategories],
               workLogPath: item.workLogPath,
             }
             if (item.category !== null) row.category = item.category
@@ -566,7 +565,6 @@ export function registerTools(ctx: Context, deps: ToolDeps): void {
           const row: JsonObject = {
             project: target.project,
             typeDir: target.typeDir,
-            allowedCategories: [...target.allowedCategories],
             todoPending: summary.todoPending,
             todoDone: summary.todoDone,
             scheduleTotal: summary.scheduleTotal,

@@ -16,7 +16,7 @@ import type { Context } from '@deepseek-ai/cordis'
 
 import { resolvePriorityColors, type ResolvedPriorityColors } from '@dslegal/core'
 
-import { Config, resolveTypeDirs, type HostConfig } from './config.js'
+import { Config, type HostConfig } from './config.js'
 import { isConfigured, type LegalDeps, type ResolvedPaths } from './deps.js'
 import { registerHttpRoutes, type WebServerLike } from './http.js'
 import { openInDefaultApp } from './opener.js'
@@ -69,8 +69,6 @@ function pathsKey(value: ResolvedPaths): string {
 }
 
 export function apply(ctx: Context, config: HostConfig): void {
-  const typeDirs = resolveTypeDirs(config)
-
   let paths: ResolvedPaths = pathsFromConfig(config)
   let cached: ScanResult | null = null
   let cachedKey: string | null = null
@@ -82,7 +80,6 @@ export function apply(ctx: Context, config: HostConfig): void {
     if (cached === null || force || cachedKey !== key) {
       cached = await scanProjects({
         rootDir: paths.rootDir,
-        typeDirs,
         extraTypeDirs: paths.extraTypeDirs,
         extraProjectDirs: paths.extraProjectDirs,
       })

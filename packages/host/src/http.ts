@@ -63,7 +63,6 @@ function projectJson(location: ProjectLocation): Record<string, unknown> {
     project: location.project,
     typeDir: location.typeDir,
     workLogPath: location.workLogPath,
-    allowedCategories: [...location.allowedCategories],
   }
   if (location.category !== null) json.category = location.category
   if (location.title !== null) json.title = location.title

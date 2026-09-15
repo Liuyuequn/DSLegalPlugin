@@ -5,20 +5,19 @@
  * `<根目录>/<类型目录>/<项目目录>/0. 协作/1. 工作日志.md`。
  *
  * **三级目录都可以由用户单独指定**（用户 2026-09-15 明确要求）：
- * - **根目录**：它下面的子文件夹不是一律都算类型目录，而是走**两条判据**：
- *   ① **名称在映射里**（默认 5 个）→ 是类型目录，与既有行为一致；
- *   ② 名称不在映射里的 → **结构补判**：只有当它下面**存在**符合项目目录形式规则的子文件夹
- *      （即 `<子文件夹>/0. 协作/1. 工作日志.md` 是一个文件）时，才认它是类型目录。
- *   两条都不满足的文件夹**完全不扫**，所以根目录里放别的东西（归档、草稿，乃至**案件文件夹
- *   本身**——它下面只有 `0. 协作`，没有 `<子>/0. 协作/1. 工作日志.md`）都不会被误判成类型目录。
- * - **类型目录**：除根目录下的默认类型目录外，还可以**另行指定任意绝对路径**（可以在根目录
- *   之外）；它下面的子文件夹就是项目目录。
+ * - **根目录**：它下面的子文件夹**只按结构推定**——只有当它下面**存在**符合项目目录形式
+ *   规则的子文件夹（即 `<子文件夹>/0. 协作/1. 工作日志.md` 是一个文件）时，才判它是类型目录。
+ *   **名字完全不参与判定**（2026-09-15 用户要求彻底取消"名称映射"这种判定方法）。
+ *   因此根目录里放别的东西（归档、草稿，乃至**案件文件夹本身**——它下面只有 `0. 协作`，
+ *   没有 `<子>/0. 协作/1. 工作日志.md`）都不会被误判成类型目录。
+ * - **类型目录**：也可以**另行指定任意绝对路径**（可以在根目录之外）；它下面的子文件夹
+ *   就是项目目录（显式指定的含义是"我就要这一层当类型目录"，故不再要求结构先满足）。
  * - **项目目录**：还可以**直接指定任意绝对路径**（可以在根目录之外）；此时它的"类型目录名"
- *   取父文件夹名，允许的类别按该名字在映射里的取值，映射里没有这个名字则**不限类别**。
+ *   取父文件夹名。
  *
  * 类别来源：工作日志的 **H1 标题**（`# 工作日志_<类别>`，诉讼类为
- * `# 工作日志_民事` / `_刑事` / `_行政`）。类型目录名只表达大类，不足以区分
- * 诉讼案件下的民事 / 刑事 / 行政，故以 H1 标题为准。
+ * `# 工作日志_民事` / `_刑事` / `_行政`）。**这是唯一的类别依据**——目录名不表达任何类别，
+ * 也就不存在"类别与目录不符"这种判定（它本来就是按目录名判的，随映射表一并取消）。
  *
  * 插件**不创建**任何目录，只读取既有结构。
  */
@@ -28,7 +27,6 @@ import { basename, dirname, join, resolve } from 'node:path'
 
 import {
   COLLAB_DIR,
-  SERVICE_CATEGORIES,
   WORK_LOG_FILE,
   categoryFromTitle,
   parseWorkLogTitle,
@@ -39,12 +37,10 @@ import {
 export interface ProjectLocation {
   /** 项目名（项目文件夹名）。 */
   readonly project: string
-  /** 类型目录名。 */
+  /** 类型目录名（就是那一层文件夹的名字，只用来消歧与显示）。 */
   readonly typeDir: string
   /** 类型目录绝对路径。 */
   readonly typeDirPath: string
-  /** 该类型目录允许的类别集合。 */
-  readonly allowedCategories: readonly ServiceCategory[]
   /** 由工作日志 H1 解析出的类别；无法确定时为 `null`。 */
   readonly category: ServiceCategory | null
   /** 工作日志 H1 原文。 */
@@ -53,7 +49,7 @@ export interface ProjectLocation {
   readonly projectPath: string
   /** 「1. 工作日志.md」绝对路径。 */
   readonly workLogPath: string
-  /** 类别异常说明（标题缺失 / 无法识别 / 与类型目录不符）；正常为 `null`。 */
+  /** 类别异常说明（标题缺失 / 无法识别）；正常为 `null`。 */
   readonly categoryIssue: string | null
 }
 
@@ -67,8 +63,6 @@ export interface IncompleteProject {
 export interface ScanOptions {
   /** 根目录绝对路径；未设定时为 `null`（只配了另行指定的目录时仍可扫描）。 */
   readonly rootDir: string | null
-  /** 类型目录名 → 允许的服务类别。 */
-  readonly typeDirs: Readonly<Record<string, readonly ServiceCategory[]>>
   /** 另行指定的类型目录（绝对路径列表，可在根目录之外）。 */
   readonly extraTypeDirs?: readonly string[]
   /** 另行指定的项目目录（绝对路径列表，可在根目录之外）。 */
@@ -109,26 +103,13 @@ async function readTitle(path: string): Promise<string | null> {
 }
 
 /**
- * 某类型目录允许的类别。
- *
- * 映射里有这个名字就用映射（例如「诉讼案件」只许民事 / 刑事 / 行政）；**没有就不限类别**
- * ——另行指定的类型目录名往往不在默认映射里（那是用户自己的分类习惯），此时按"不限制"
- * 处理，否则完全合法的工作日志会被判成「类别与目录不符」。**结构补判**认出来的类型目录
- * 同样走这一条（名字不在映射里 = 不限类别）。
- */
-function allowedFor(
-  typeDirs: Readonly<Record<string, readonly ServiceCategory[]>>,
-  typeDir: string,
-): readonly ServiceCategory[] {
-  return typeDirs[typeDir] ?? SERVICE_CATEGORIES
-}
-
-/**
  * 一个目录下**是否存在**符合项目目录形式规则的子文件夹。
  *
  * "项目目录形式规则"就是本插件认项目的唯一结构判据：`<子文件夹>/0. 协作/1. 工作日志.md`
- * 是一个文件。**命中一条就返回**——根目录下未在映射里的文件夹可能是几十个，而探测每个都
- * 要读一次子目录列表；短路之后最坏情况才是"把这个文件夹翻一遍"。
+ * 是一个文件。**命中一条就返回**——根目录下的文件夹可能有几十个，而探测每个都要读一次
+ * 子目录列表；短路之后最坏情况才是"把这个文件夹翻一遍"。
+ *
+ * 这同时也是**判定类型目录的唯一依据**（2026-09-15 起不再有任何名称判据）。
  */
 async function hasProjectChild(typeDirPath: string): Promise<boolean> {
   for (const project of await listDirectories(typeDirPath)) {
@@ -140,15 +121,10 @@ async function hasProjectChild(typeDirPath: string): Promise<boolean> {
 function describeCategoryIssue(
   title: string | null,
   category: ServiceCategory | null,
-  allowed: readonly ServiceCategory[],
-  typeDir: string,
 ): string | null {
   if (title === null) return '工作日志缺少 H1 标题；应为「# 工作日志_<类别>」。'
   if (category === null) {
     return `H1 标题「${title}」无法识别；应为「# 工作日志_<类别>」（诉讼类如「# 工作日志_民事」）。`
-  }
-  if (!allowed.includes(category)) {
-    return `类别「${category}」不属于类型目录「${typeDir}」（该目录允许：${allowed.join('、')}）。`
   }
   return null
 }
@@ -169,17 +145,16 @@ interface Sink {
 /**
  * 收一个项目目录（含"结构不完整"的情况）。
  *
- * `reportIncomplete` 决定缺工作日志的目录要不要进 `incomplete` 清单：映射里 / 用户显式
- * 指定的类型目录要（用户在那儿放了东西却不成项目，是值得看见的事实），**结构补判**认出来
- * 的类型目录不要——它是靠"下面确实有合格项目"才被认出来的，其余子文件夹（`1. 材料`、
- * `2. 归档` 这类）逐个报成"缺工作日志"只会淹没有用信息。
+ * `reportIncomplete` 决定缺工作日志的目录要不要进 `incomplete` 清单：**用户显式指定**的
+ * 类型目录要（他亲手把这条路径指过来，里面却没有一个成形的项目，是值得看见的事实）；
+ * **根目录下结构推定**出来的类型目录不要——它本就是靠"下面确实有合格项目"才被认出来的，
+ * 其余子文件夹（`1. 材料`、`2. 归档` 这类）逐个报成"缺工作日志"只会淹没有用信息。
  */
 async function collectProject(
   projectPath: string,
   project: string,
   typeDir: string,
   typeDirPath: string,
-  allowed: readonly ServiceCategory[],
   reportIncomplete: boolean,
   sink: Sink,
 ): Promise<void> {
@@ -198,12 +173,11 @@ async function collectProject(
     project,
     typeDir,
     typeDirPath,
-    allowedCategories: allowed,
     category,
     title,
     projectPath,
     workLogPath,
-    categoryIssue: describeCategoryIssue(title, category, allowed, typeDir),
+    categoryIssue: describeCategoryIssue(title, category),
   })
 }
 
@@ -211,7 +185,6 @@ async function collectProject(
 async function collectTypeDir(
   typeDirPath: string,
   typeDir: string,
-  allowed: readonly ServiceCategory[],
   reportIncomplete: boolean,
   sink: Sink,
 ): Promise<void> {
@@ -221,7 +194,6 @@ async function collectTypeDir(
       project,
       typeDir,
       typeDirPath,
-      allowed,
       reportIncomplete,
       sink,
     )
@@ -229,12 +201,11 @@ async function collectTypeDir(
 }
 
 /**
- * 扫描：根目录下的默认类型目录 → 根目录下的**结构补判**类型目录 → 另行指定的类型目录 →
- * 另行指定的项目目录。
+ * 扫描：根目录下**结构推定**出来的类型目录 → 另行指定的类型目录 → 另行指定的项目目录。
  *
- * 顺序即优先级：同一个项目目录被多处命中时，取**先扫到**的那一份（根目录扫描的类别判定
- * 最准，因为它的类型目录名一定在映射里）。目录不存在时不抛错，只是扫不到东西——磁盘是
- * 唯一真相，"目录没了"应当在界面上表现为"项目没了"，而不是整片面板报错。
+ * 顺序即优先级：同一个项目目录被多处命中时，取**先扫到**的那一份（根目录扫描出来的
+ * `typeDir` 是它真正所在的那一层）。目录不存在时不抛错，只是扫不到东西——磁盘是唯一真相，
+ * "目录没了"应当在界面上表现为"项目没了"，而不是整片面板报错。
  *
  * 唯一的例外是**另行指定的项目目录**：它是用户手填的那一条路径，不存在时进 `incomplete`
  * 如实报出来（用户写错了路径，应该看得见，而不是静默消失）。
@@ -244,27 +215,20 @@ export async function scanProjects(options: ScanOptions): Promise<ScanResult> {
 
   const root = options.rootDir === null ? null : resolve(options.rootDir)
   if (root !== null) {
-    // ① 映射里的名称：照旧无条件扫。它下面一个合格项目都没有时，那些子文件夹照旧进
-    //    `incomplete`——"这里放了东西却不成项目"是用户该看见的事实。
-    for (const [typeDir, categories] of Object.entries(options.typeDirs)) {
-      await collectTypeDir(join(root, typeDir), typeDir, categories, true, sink)
-    }
-    // ② 名称不在映射里的：**结构补判**。只有当它下面存在符合项目目录形式规则的子文件夹
-    //    时才认它是类型目录（此时不限类别），其余子文件夹静默跳过。
-    //    这一条同时挡住了"根目录下堆着案件文件夹"的常见盘面：案件文件夹下面只有
-    //    `0. 协作`，没有 `<子>/0. 协作/1. 工作日志.md`，所以它不会被误判成类型目录。
+    // **只按结构推定**：一个子文件夹是不是类型目录，看它下面有没有符合项目目录形式规则的
+    // 子文件夹。名字不参与判定（2026-09-15 用户要求取消名称映射）。推定出来的类型目录其余
+    // 子文件夹静默跳过；同时这一条天然挡住了"根目录下堆着案件文件夹"的盘面——案件文件夹
+    // 下面只有 `0. 协作`，没有 `<子>/0. 协作/1. 工作日志.md`。
     for (const name of await listDirectories(root)) {
-      if (options.typeDirs[name] !== undefined) continue
       const typeDirPath = join(root, name)
       if (!(await hasProjectChild(typeDirPath))) continue
-      await collectTypeDir(typeDirPath, name, allowedFor(options.typeDirs, name), false, sink)
+      await collectTypeDir(typeDirPath, name, false, sink)
     }
   }
 
   for (const dir of options.extraTypeDirs ?? []) {
     const abs = resolve(dir)
-    const typeDir = basename(abs)
-    await collectTypeDir(abs, typeDir, allowedFor(options.typeDirs, typeDir), true, sink)
+    await collectTypeDir(abs, basename(abs), true, sink)
   }
 
   for (const dir of options.extraProjectDirs ?? []) {
@@ -276,7 +240,6 @@ export async function scanProjects(options: ScanOptions): Promise<ScanResult> {
       basename(abs),
       typeDir,
       parent,
-      allowedFor(options.typeDirs, typeDir),
       true,
       sink,
     )
