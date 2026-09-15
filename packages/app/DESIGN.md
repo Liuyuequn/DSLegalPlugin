@@ -55,12 +55,12 @@ DSH 插件可以同时拥有 **host 面**（Node）与**浏览器面**（Web）�
 deps: { alwaysBundle: [/^@dslegal\//] }
 ```
 
-产物体量（`0.1.0`）：
+产物体量（`0.2.0`）：
 
 | 产物 | 大小 | 外部依赖 |
 | --- | --- | --- |
-| `lib/index.js` | 839 KB | **只有 `node:*` 内置模块**（`schemastery`、`chokidar` 已内联） |
-| `lib/client.js` | 687 KB | **只有 `react`、`react/jsx-runtime`**（由 shell 提供） |
+| `lib/index.js` | 855 KB | **只有 `node:*` 内置模块**（`schemastery`、`chokidar` 已内联） |
+| `lib/client.js` | 708 KB | **只有 `react`、`react/jsx-runtime`**（由 shell 提供） |
 
 所以 `dependencies` 是**空的**——这是刻意的：内部三包从未发布到 npm，若留在 `dependencies` 里，`pnpm publish` 会把 `workspace:*` 改写成 `@dslegal/core@0.0.0` 这类**不存在的版本**，用户安装必然失败。它们只出现在 `devDependencies`（构建输入）。
 

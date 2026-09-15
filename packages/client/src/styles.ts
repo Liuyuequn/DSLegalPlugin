@@ -1466,6 +1466,66 @@ export function todoTitle(done: boolean): CSSProperties {
 // 线索三：项目
 // ---------------------------------------------------------------------------
 
+/** 一个类型目录分组的外壳：一个标题行 + 它下面的项目行。 */
+export const typeGroup: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: S.xs,
+}
+
+/**
+ * 类型目录组的标题行（可点：折叠 / 展开整组）。
+ *
+ * 造型刻意**不是一张卡片**：它是"分组标签"，不是又一个可点的条目——给它卡片底与描边，
+ * 用户会以为点进去是"看这一组"而不是"折叠它"。所以平时完全透明，只有 hover 给一层
+ * 浅浅的交互底色；层次仍靠明度差（见 AGENTS.md 8.2 第 1 条）。
+ *
+ * `border: 'none'` 是**显式关掉 `<button>` 的 UA `2px outset`**，不是"没写"——这条被
+ * `layout.test.ts` 的按钮边框守卫盯着。
+ */
+export function typeGroupHead(hovered: boolean): CSSProperties {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    gap: S.sm,
+    width: '100%',
+    padding: `${S.xs}px ${S.sm}px`,
+    borderRadius: 6,
+    border: 'none',
+    background: hovered ? T.hover : 'transparent',
+    color: T.labelSecondary,
+    fontFamily: T.font,
+    textAlign: 'left',
+    cursor: 'pointer',
+    transition: TRANSITION,
+  }
+}
+
+/**
+ * 折叠箭头：一个 `▸`，展开时原地转 90° 变 `▾`。
+ *
+ * 用**一个字符 + transform** 而不是切换两个字符：换字符会让标题的横向位置在开合之间
+ * 跳一下，rotate 则是原地转。
+ */
+export function typeGroupCaret(collapsed: boolean): CSSProperties {
+  return {
+    flex: '0 0 auto',
+    display: 'inline-block',
+    width: 10,
+    lineHeight: 1,
+    color: T.labelTertiary,
+    transform: collapsed ? 'none' : 'rotate(90deg)',
+    transition: TRANSITION,
+  }
+}
+
+/** 组内的项目列表：标题行下面那一段，折叠时整段不渲染。 */
+export const typeGroupBody: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: S.sm,
+}
+
 /** 项目列表的一行：白底 + 发丝线分隔，做成"清单"而不是"卡片墙"。 */
 export function caseRow(hovered: boolean, hasIssue: boolean): CSSProperties {
   return {

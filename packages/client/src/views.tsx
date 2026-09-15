@@ -36,6 +36,7 @@ import {
   MONTH_CHIP_HEIGHT,
   MONTH_HEAD_ZONE,
   S,
+  TABULAR,
   T,
   TODO_ROW_HEIGHT,
 } from './styles.js'
@@ -61,6 +62,7 @@ import {
   filterProjects,
   fitRows,
   fullDateLabel,
+  groupProjectsByTypeDir,
   issueNotice,
   monthAnchor,
   monthGrid,
@@ -1464,6 +1466,14 @@ export interface ProjectLensProps extends ViewProps {
   readonly scope: { readonly project: string; readonly typeDir: string } | null
   readonly setScope: (scope: { readonly project: string; readonly typeDir: string } | null) => void
   readonly agenda: Agenda | null
+  /**
+   * 被折叠起来的类型目录名。
+   *
+   * 状态放在 `client.tsx`（面板那一层）而不是本组件里：切换线索会把 `ProjectList` 整个卸载，
+   * 状态留在组件里就会在你"去日程看一眼再回来"之后被悄悄重置。
+   */
+  readonly collapsedTypeDirs: ReadonlySet<string>
+  readonly onToggleTypeDir: (typeDir: string) => void
 }
 
 /** 项目线索：先列全部项目，点进去看该项目的全部待办与日程。 */
@@ -1474,76 +1484,132 @@ export function ProjectLens(props: ProjectLensProps): JSX.Element {
 function ProjectList(props: ProjectLensProps): JSX.Element {
   const projects = props.overview.projects
   const issueTotal = projects.reduce((sum, row) => sum + row.issueCount, 0)
+  const groups = groupProjectsByTypeDir(projects)
   return (
     <>
       <div style={UI.lensHead}>
         <span style={UI.sectionTitle}>全部项目</span>
         <span style={UI.sectionHint}>
-          {projects.length} 个 · 未完成待办{' '}
+          {projects.length} 个 · {groups.length} 个类型目录 · 未完成待办{' '}
           {projects.reduce((sum, row) => sum + row.todoPending, 0)} 条
           {/* 0 条异常是可喜的默认态，写成"格式异常合计 0"只是噪音；有异常才报。 */}
           {issueTotal === 0 ? '' : ` · ⚠ 格式异常 ${issueTotal} 行`}
         </span>
       </div>
-      <div style={{ ...UI.listColumn(), padding: S.lg, gap: S.sm }}>
+      <div style={{ ...UI.listColumn(), padding: S.lg, gap: S.lg }}>
         {projects.length === 0 ? (
           <div style={UI.empty}>
             没有找到已就绪的项目。已就绪 = 存在「&lt;根目录&gt;/&lt;类型目录&gt;/&lt;项目目录&gt;/0.
             协作/1. 工作日志.md」。
           </div>
         ) : (
-          projects.map((row) => {
-            const key = `p-${row.typeDir}/${row.project}`
-            const total = row.todoPending + row.todoDone
+          groups.map((group) => {
+            const collapsed = props.collapsedTypeDirs.has(group.typeDir)
+            const headKey = `group-${group.typeDir}`
             return (
-              <button
-                key={key}
-                type="button"
-                data-fl="project-row"
-                style={UI.caseRow(props.hover === key, row.issueCount > 0)}
-                {...hoverProps(key, props)}
-                onClick={() =>
-                  props.setScope({ project: row.project, typeDir: row.typeDir })
-                }
-              >
-                <span style={UI.itemBody}>
-                  <span style={{ display: 'flex', gap: S.sm, alignItems: 'baseline', flexWrap: 'wrap' }}>
-                    <span style={{ ...FONT.itemTitle, fontWeight: 600, color: T.labelPrimary }}>
-                      {row.project}
-                    </span>
-                    <CategoryTag row={row} />
-                    {/*
-                      类型目录与 H1 类别经常同名（「法律顾问」目录里放「# 工作日志_法律顾问」），
-                      并排显示就是同一个词写两遍。只在两者不同时才补第二个标签。
-                    */}
-                    {row.typeDir === row.category ? null : (
-                      <span style={UI.tag(T.border2)}>{row.typeDir}</span>
-                    )}
-                  </span>
-                  <span style={{ ...UI.itemMeta, display: 'block' }}>
-                    未完成 {row.todoPending} · 已完成 {row.todoDone} · 日程 {row.scheduleTotal}
-                    {row.ongoing > 0 ? ` · 进行中 ${row.ongoing}` : ''}
-                  </span>
-                </span>
-                {/* 完成进度：一条 6px 的细线，比再写一遍数字更快读出"这个案子还剩多少"。 */}
-                <span style={UI.progress(total === 0 ? 0 : row.todoDone / total)} />
-                <span style={UI.metric}>
-                  {/*
-                    只在真有问题时报错，不报"正常"：一个恒为"正常"的绿灯不携带信息，
-                    却占掉了右侧最显眼的位置——未完成条数才是这个列表要回答的问题。
-                  */}
-                  {row.issueCount > 0 ? <span style={{ color: T.warn }}>⚠ 异常 {row.issueCount}</span> : null}
+              <section key={group.typeDir} data-fl="type-group" style={UI.typeGroup}>
+                {/*
+                  组头是**按钮**：它的唯一动作就是开合这一组，键盘 Enter / 空格也得能用。
+                  `aria-expanded` 让读屏能说出当前是展开还是折叠。
+                */}
+                <button
+                  type="button"
+                  data-fl="type-group-head"
+                  aria-expanded={!collapsed}
+                  title={collapsed ? `展开「${group.typeDir}」` : `折叠「${group.typeDir}」`}
+                  style={UI.typeGroupHead(props.hover === headKey)}
+                  {...hoverProps(headKey, props)}
+                  onClick={() => props.onToggleTypeDir(group.typeDir)}
+                >
+                  <span style={UI.typeGroupCaret(collapsed)}>▸</span>
                   <span style={{ ...FONT.itemTitle, fontWeight: 600, color: T.labelPrimary }}>
-                    {row.todoPending}
+                    {group.typeDir}
                   </span>
-                  <span>未完成 / 共 {total}</span>
-                </span>
-              </button>
+                  <span style={UI.sectionHint}>{group.projects.length} 个项目</span>
+                  {/*
+                    折叠起来时"这组还剩多少"必须留在组头上——折叠是为了腾地方，
+                    不是为了把这组的状态藏掉。所以汇总数字两边都显示。
+                  */}
+                  <span
+                    style={{
+                      marginLeft: 'auto',
+                      display: 'flex',
+                      gap: S.sm,
+                      ...FONT.caption,
+                      color: T.labelTertiary,
+                      ...TABULAR,
+                    }}
+                  >
+                    {group.issueCount > 0 ? (
+                      <span style={{ color: T.warn }}>⚠ 异常 {group.issueCount}</span>
+                    ) : null}
+                    <span>未完成 {group.todoPending} 条</span>
+                  </span>
+                </button>
+                {collapsed ? null : (
+                  <div data-fl="type-group-body" style={UI.typeGroupBody}>
+                    {group.projects.map((row) => (
+                      <ProjectListRow
+                        key={`p-${row.typeDir}/${row.project}`}
+                        {...props}
+                        row={row}
+                      />
+                    ))}
+                  </div>
+                )}
+              </section>
             )
           })
         )}
       </div>
     </>
+  )
+}
+
+/**
+ * 项目列表里的一行（分组之后由 {@link ProjectList} 逐组渲染）。
+ *
+ * **不再缀类型目录标签**：分组头已经写着它是哪个类型目录了，每行再重复一遍是噪音。
+ * 类别标签（H1 解析出来的服务类别）照旧保留——那是每个案子自己的属性。
+ */
+function ProjectListRow(props: ProjectLensProps & { readonly row: ProjectRow }): JSX.Element {
+  const { row } = props
+  const key = `p-${row.typeDir}/${row.project}`
+  const total = row.todoPending + row.todoDone
+  return (
+    <button
+      type="button"
+      data-fl="project-row"
+      style={UI.caseRow(props.hover === key, row.issueCount > 0)}
+      {...hoverProps(key, props)}
+      onClick={() => props.setScope({ project: row.project, typeDir: row.typeDir })}
+    >
+      <span style={UI.itemBody}>
+        <span style={{ display: 'flex', gap: S.sm, alignItems: 'baseline', flexWrap: 'wrap' }}>
+          <span style={{ ...FONT.itemTitle, fontWeight: 600, color: T.labelPrimary }}>
+            {row.project}
+          </span>
+          <CategoryTag row={row} />
+        </span>
+        <span style={{ ...UI.itemMeta, display: 'block' }}>
+          未完成 {row.todoPending} · 已完成 {row.todoDone} · 日程 {row.scheduleTotal}
+          {row.ongoing > 0 ? ` · 进行中 ${row.ongoing}` : ''}
+        </span>
+      </span>
+      {/* 完成进度：一条 6px 的细线，比再写一遍数字更快读出"这个案子还剩多少"。 */}
+      <span style={UI.progress(total === 0 ? 0 : row.todoDone / total)} />
+      <span style={UI.metric}>
+        {/*
+          只在真有问题时报错，不报"正常"：一个恒为"正常"的绿灯不携带信息，
+          却占掉了右侧最显眼的位置——未完成条数才是这个列表要回答的问题。
+        */}
+        {row.issueCount > 0 ? <span style={{ color: T.warn }}>⚠ 异常 {row.issueCount}</span> : null}
+        <span style={{ ...FONT.itemTitle, fontWeight: 600, color: T.labelPrimary }}>
+          {row.todoPending}
+        </span>
+        <span>未完成 / 共 {total}</span>
+      </span>
+    </button>
   )
 }
 
@@ -1952,7 +2018,8 @@ const HELP_SECTIONS: readonly {
     title: '项目线索',
     hint: '按案件读，一条待办都不裁',
     lines: [
-      '列出全部已就绪项目，每个项目显示未完成待办、已完成待办、日程总数与格式异常数，右侧细线是完成进度。',
+      '项目**按类型目录分组**列出：点组头那一行（目录名 + 项目数 + 这组还剩多少未完成）即可**折叠 / 展开**这一组；折叠只影响显示，不改动任何数据。',
+      '展开的每个项目显示未完成待办、已完成待办、日程总数与格式异常数，右侧细线是完成进度。',
       '点进项目后，待办按**四个优先级铺成 2×2 四象限**（每格是标题 + 备注 + 勾选框，未完成在前、已完成在后），日程在下方按时间升序。',
       '四象限里**空格也会显示**并写「暂无」——"这一类一件事都没有"本身就是要读到的信息；整个项目详情一页滚到底，**一条待办都不会被截掉**。没写优先级的待办不属于任何象限，单独列在四象限下面。',
       '想给这个案子记一件事，就在「**待办事项**」或「**日程安排**」这两张卡片里点空白：案件默认就是这个，窗里也可以改成别的。',

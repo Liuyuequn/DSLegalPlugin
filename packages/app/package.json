@@ -1,6 +1,6 @@
 {
   "name": "dsh-legal-schedule",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "律师日程与待办可视化管理工作台 —— DeepSeek Harness (DSH) 插件：把本地 markdown 工作日志渲染成日历 / 四象限待办 / 项目明细三条线索。",
   "license": "MIT",
   "author": "刘越群",

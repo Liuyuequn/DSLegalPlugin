@@ -349,6 +349,22 @@ function Workbench(): JSX.Element {
   const [form, setForm] = useState<ScheduleForm>('day')
   const [cursor, setCursor] = useState(() => todayKey())
   const [scope, setScope] = useState<Scope>(null)
+  /**
+   * 项目线索里**被折叠起来的类型目录名**。
+   *
+   * 状态放在面板这一层，不放 `ProjectList` 里：切线索会把 `ProjectList` 整个卸载，
+   * 状态留在组件里就活不过"去日程看一眼再回来"。**也不落 localStorage**——类型目录名
+   * 随磁盘变，存下来的旧名字只会在下次会话里留下一堆折叠不了的孤儿键。
+   */
+  const [collapsedTypeDirs, setCollapsedTypeDirs] = useState<ReadonlySet<string>>(() => new Set())
+  const toggleTypeDir = useCallback((typeDir: string) => {
+    setCollapsedTypeDirs((current) => {
+      const next = new Set(current)
+      if (next.has(typeDir)) next.delete(typeDir)
+      else next.add(typeDir)
+      return next
+    })
+  }, [])
   const [overview, setOverview] = useState<Overview | null>(null)
   /**
    * 三级目录是否已设定（只设了「另行指定的项目目录」也算已配置）。
@@ -1224,7 +1240,14 @@ function Workbench(): JSX.Element {
             ) : lens === 'todo' ? (
               <TodoLens {...viewProps} />
             ) : (
-              <ProjectLens {...viewProps} scope={scope} setScope={setScope} agenda={agenda} />
+              <ProjectLens
+                {...viewProps}
+                scope={scope}
+                setScope={setScope}
+                agenda={agenda}
+                collapsedTypeDirs={collapsedTypeDirs}
+                onToggleTypeDir={toggleTypeDir}
+              />
             )}
           </div>
 

@@ -389,6 +389,7 @@ describe('用在 <button> 上的样式必须把边框说全（UA 是 2px outset�
     todayButton: () => todayButton(false),
     weekBar: () => weekBar('#E53E3E', false, false),
     caseRow: () => caseRow(false, false),
+    typeGroupHead: () => UI.typeGroupHead(false),
     primaryButton: () => primaryButton(false, false),
     monthChip: () => monthChip('#E53E3E', false, false),
     popoverAction: () => popoverAction(false, false),
@@ -1201,5 +1202,77 @@ describe('插件设置：目录设置表单（三级目录各自独立）', () =
     expect(open, '草稿没有先落到总览那一份（getOverview 保证有值）').toContain(
       'directoryTextOf(overview?.extraTypeDirs ?? [])',
     )
+  })
+})
+
+/**
+ * 项目线索：**按类型目录归并 + 组头可折叠**（2026-09-15 用户要求）。
+ *
+ * 归并逻辑本身在 `view.test.ts`（纯函数有单测）；这里守的是"界面真的这么画"：
+ * 分组函数被用上、组头是能点的按钮且带上 `aria-expanded`、折叠时整组内容**不渲染**
+ * （而不是用样式藏起来——藏起来仍然会被"点空白新建"的热区和 `data-fl-item` 判定看见），
+ * 以及箭头是"一个字符原地转"而不是换字符。
+ */
+describe('项目线索：按类型目录分组 + 可折叠', () => {
+  const VIEWS = readFileSync(new URL('../src/views.tsx', import.meta.url), 'utf8')
+  const CLIENT = readFileSync(new URL('../src/client.tsx', import.meta.url), 'utf8')
+
+  /** 抠出 `ProjectList` 的函数体（到下一个顶层 `function` / `export` 为止）。 */
+  const projectList = (): string => {
+    const start = VIEWS.indexOf('function ProjectList(')
+    expect(start, '找不到 ProjectList，说明结构变了，请同步这个守卫').toBeGreaterThan(-1)
+    const rest = VIEWS.slice(start)
+    const end = rest.search(/\n(\/\*\*|function |export function |const )/)
+    return end < 0 ? rest : rest.slice(0, end)
+  }
+
+  it('项目列表按类型目录归并（不是平铺）', () => {
+    const list = projectList()
+    expect(list, '又退回"一行一个项目"的平铺了').toContain('groupProjectsByTypeDir(')
+    expect(list, '少了分组容器标记').toContain('data-fl="type-group"')
+    expect(list, '少了组内列表标记（端到端探针靠它数条数）').toContain('data-fl="type-group-body"')
+    expect(list, '组头的类型目录名必须显示出来').toContain('{group.typeDir}')
+  })
+
+  it('组头是**按钮**且带 aria-expanded（键盘也能开合、读屏能念出状态）', () => {
+    const list = projectList()
+    const head = list.indexOf('data-fl="type-group-head"')
+    expect(head, '组头没有标记，探针与守卫都没法定位它').toBeGreaterThan(-1)
+    // 往回找最近的一个 `<button`：组头必须是按钮（可点 + 键盘可达），不是 div。
+    const openTag = list.lastIndexOf('<button', head)
+    expect(openTag, '组头不是 <button>——那样键盘 Enter / 空格按不动').toBeGreaterThan(-1)
+    // 整个开标签（到 `</button>` 为止）：属性顺序会变，所以按"这一段里有"来断言。
+    const tag = list.slice(openTag, list.indexOf('</button>', head))
+    expect(tag).toContain('aria-expanded={!collapsed}')
+    // 点击动作必须是"开合这一组"，不是"进这一组"。
+    expect(tag).toContain('onToggleTypeDir')
+  })
+
+  it('折叠时整组内容**不渲染**（条件渲染，不是 display:none 藏起来）', () => {
+    const list = projectList()
+    const cond = list.indexOf('collapsed ? null :')
+    const body = list.indexOf('data-fl="type-group-body"')
+    expect(cond, '折叠不是条件渲染——藏起来的内容仍会被热区与条目判定看见').toBeGreaterThan(-1)
+    expect(body, '组内列表不在折叠条件里面').toBeGreaterThan(cond)
+  })
+
+  it('折叠状态存在面板那一层（切线索不丢）', () => {
+    expect(CLIENT, '折叠状态放进了 ProjectList，切线索回来就重置').toContain(
+      'const [collapsedTypeDirs, setCollapsedTypeDirs]',
+    )
+    expect(CLIENT, '面板没把折叠状态传给 ProjectLens').toContain('collapsedTypeDirs={collapsedTypeDirs}')
+    expect(CLIENT, '面板没把开合回调传给 ProjectLens').toContain('onToggleTypeDir={toggleTypeDir}')
+  })
+
+  it('箭头是"一个字符原地转"，不是换字符（换字符会让标题横向跳一下）', () => {
+    expect(UI.typeGroupCaret(true).transform).toBe('none')
+    expect(UI.typeGroupCaret(false).transform).toBe('rotate(90deg)')
+    const list = projectList()
+    expect(list, '箭头没跟着折叠状态变').toContain('UI.typeGroupCaret(collapsed)')
+  })
+
+  it('组头平时不给卡片底：它是分组标签，不是又一个可点的条目', () => {
+    expect(UI.typeGroupHead(false).background).toBe('transparent')
+    expect(UI.typeGroupHead(true).background).not.toBe(UI.typeGroupHead(false).background)
   })
 })

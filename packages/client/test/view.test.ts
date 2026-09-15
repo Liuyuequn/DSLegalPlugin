@@ -18,6 +18,7 @@ import {
   filterProjects,
   fullDateLabel,
   fitRows,
+  groupProjectsByTypeDir,
   issueNotice,
   monthAnchor,
   monthGrid,
@@ -712,6 +713,66 @@ describe('新建窗：项目候选的筛选', () => {
     const snapshot = JSON.stringify(案件)
     filterProjects(案件, '赵六')
     expect(JSON.stringify(案件)).toBe(snapshot)
+  })
+})
+
+describe('项目线索：按类型目录归并', () => {
+  /** 一份"host 已经排好序"的项目列表（有异常的在前，再按项目名）。 */
+  const 项目 = [
+    { typeDir: '诉讼案件', project: '甲案', todoPending: 2, todoDone: 1, scheduleTotal: 3, issueCount: 1 },
+    { typeDir: '法律顾问', project: '乙单位', todoPending: 0, todoDone: 4, scheduleTotal: 1, issueCount: 0 },
+    { typeDir: '诉讼案件', project: '丙案', todoPending: 5, todoDone: 0, scheduleTotal: 2, issueCount: 2 },
+  ]
+
+  it('按 typeDir 归并，组内保持传入顺序', () => {
+    const groups = groupProjectsByTypeDir(项目)
+    expect(groups.map((group) => group.typeDir)).toEqual(['诉讼案件', '法律顾问'])
+    expect(groups[0]!.projects.map((row) => row.project)).toEqual(['甲案', '丙案'])
+    expect(groups[1]!.projects.map((row) => row.project)).toEqual(['乙单位'])
+  })
+
+  it('组的顺序 = 首次出现序，不按目录名重排', () => {
+    // 用 ASCII 名字把这件事故意做成"反字母序"，免得中文排序规则一变这条守卫就失效。
+    const rows = [
+      { typeDir: 'Zeta', project: '一', todoPending: 1, todoDone: 0, scheduleTotal: 0, issueCount: 0 },
+      { typeDir: 'Alpha', project: '二', todoPending: 1, todoDone: 0, scheduleTotal: 0, issueCount: 0 },
+      { typeDir: 'Zeta', project: '三', todoPending: 1, todoDone: 0, scheduleTotal: 0, issueCount: 0 },
+    ]
+    expect(groupProjectsByTypeDir(rows).map((group) => group.typeDir)).toEqual(['Zeta', 'Alpha'])
+  })
+
+  it('每组带自己的汇总（折叠起来时靠它报"这组还剩多少"）', () => {
+    const groups = groupProjectsByTypeDir(项目)
+    const litigation = groups[0]!
+    expect(litigation.todoPending).toBe(7)
+    expect(litigation.todoDone).toBe(1)
+    expect(litigation.scheduleTotal).toBe(5)
+    expect(litigation.issueCount).toBe(3)
+    const advisor = groups[1]!
+    expect(advisor.todoPending).toBe(0)
+    expect(advisor.todoDone).toBe(4)
+    expect(advisor.scheduleTotal).toBe(1)
+    expect(advisor.issueCount).toBe(0)
+  })
+
+  it('同名项目落在不同目录 → 分到两组（分组键是 typeDir，不是项目名）', () => {
+    const rows = [
+      { typeDir: '诉讼案件', project: '同名案', todoPending: 0, todoDone: 0, scheduleTotal: 0, issueCount: 0 },
+      { typeDir: '法律顾问', project: '同名案', todoPending: 0, todoDone: 0, scheduleTotal: 0, issueCount: 0 },
+    ]
+    const groups = groupProjectsByTypeDir(rows)
+    expect(groups).toHaveLength(2)
+    expect(groups.map((group) => group.projects.length)).toEqual([1, 1])
+  })
+
+  it('没有项目时给空数组（由界面写"没有找到已就绪的项目"）', () => {
+    expect(groupProjectsByTypeDir([])).toEqual([])
+  })
+
+  it('不改动入参', () => {
+    const snapshot = JSON.stringify(项目)
+    groupProjectsByTypeDir(项目)
+    expect(JSON.stringify(项目)).toBe(snapshot)
   })
 })
 

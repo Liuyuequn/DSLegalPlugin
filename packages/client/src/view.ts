@@ -509,6 +509,72 @@ export function filterProjects<T extends { readonly project: string; readonly ty
 }
 
 // ---------------------------------------------------------------------------
+// 项目线索：按类型目录归并
+// ---------------------------------------------------------------------------
+
+/** 分组汇总用到的字段（`ProjectRow` 结构上就满足它）。 */
+export interface ProjectGroupRow {
+  readonly typeDir: string
+  readonly todoPending: number
+  readonly todoDone: number
+  readonly scheduleTotal: number
+  readonly issueCount: number
+}
+
+/** 一个类型目录及其下面的全部项目，外加该组的汇总。 */
+export interface ProjectGroup<T> {
+  /** 类型目录名（就是那一层文件夹的名字）。 */
+  readonly typeDir: string
+  /** 组内的项目，顺序与传入顺序一致。 */
+  readonly projects: readonly T[]
+  /** 组内汇总：折叠起来时"这组还剩多少"就靠它，信息不随折叠丢掉。 */
+  readonly todoPending: number
+  readonly todoDone: number
+  readonly scheduleTotal: number
+  readonly issueCount: number
+}
+
+/**
+ * 按**类型目录**把项目归并成组。
+ *
+ * 三条约定：
+ * - **组内顺序 = 传入顺序**。host 给的顺序已经稳定（有格式异常的在前，再按项目名），
+ *   视图层不另造一套排序——同一份数据在"平铺"与"分组"两种画法下顺序必须一致。
+ * - **组的顺序 = 该组第一个项目在传入列表里的位置（首次出现序）**。这样"哪一组更该先看"
+ *   仍由 host 那套"有问题的在前"决定；改成按目录名排，会让"诉讼案件里堆着十条异常"
+ *   这种信息消失在字母序里。
+ * - **同名项目落在不同目录 → 分到两组**（分组键是 `typeDir`，不是项目名）。
+ *
+ * 纯函数：不改动入参，返回新数组与新对象。
+ */
+export function groupProjectsByTypeDir<T extends ProjectGroupRow>(
+  projects: readonly T[],
+): ProjectGroup<T>[] {
+  const order: string[] = []
+  const buckets = new Map<string, T[]>()
+  for (const row of projects) {
+    const bucket = buckets.get(row.typeDir)
+    if (bucket === undefined) {
+      buckets.set(row.typeDir, [row])
+      order.push(row.typeDir)
+    } else {
+      bucket.push(row)
+    }
+  }
+  return order.map((typeDir) => {
+    const rows = buckets.get(typeDir) ?? []
+    return {
+      typeDir,
+      projects: rows,
+      todoPending: rows.reduce((sum, row) => sum + row.todoPending, 0),
+      todoDone: rows.reduce((sum, row) => sum + row.todoDone, 0),
+      scheduleTotal: rows.reduce((sum, row) => sum + row.scheduleTotal, 0),
+      issueCount: rows.reduce((sum, row) => sum + row.issueCount, 0),
+    }
+  })
+}
+
+// ---------------------------------------------------------------------------
 // 目录设置：三级目录的多行文本 ↔ 字符串数组
 // ---------------------------------------------------------------------------
 
