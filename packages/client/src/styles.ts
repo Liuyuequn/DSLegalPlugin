@@ -406,7 +406,7 @@ export function iconButton(hovered: boolean): CSSProperties {
   }
 }
 
-/** 朴素文字按钮（数据目录 / 刷新）。 */
+/** 朴素文字按钮（目录设置 / 刷新）。 */
 export function textButton(hovered: boolean): CSSProperties {
   return {
     flex: '0 0 auto',
@@ -2222,7 +2222,7 @@ export const composePicker: CSSProperties = {
 }
 
 /**
- * 选择器的触发器（`<button>`）。当前选中的项目名 + 顶级目录名 + 一个翻转的箭头。
+ * 选择器的触发器（`<button>`）。当前选中的项目名 + 类型目录名 + 一个翻转的箭头。
  *
  * `border` 用简写写全：它是按钮，只写某几条边会让 UA 那圈 2px outset 漏出来。
  */
@@ -2257,7 +2257,7 @@ export const composeProjectName: CSSProperties = {
   whiteSpace: 'nowrap',
 }
 
-/** 顶级目录名：同名项目在不同目录里就靠它区分。 */
+/** 类型目录名：同名项目在不同目录里就靠它区分。 */
 export const composeProjectDir: CSSProperties = {
   flex: '0 0 auto',
   ...FONT.caption,

@@ -200,7 +200,7 @@ export function schedulesByDay<T extends ScheduleCore>(
 // 待办四象限
 // ---------------------------------------------------------------------------
 
-type Rankable = Pick<TodoCore, 'done' | 'line'> & { readonly project: string; readonly topLevelDir: string }
+type Rankable = Pick<TodoCore, 'done' | 'line'> & { readonly project: string; readonly typeDir: string }
 
 /**
  * 待办排序：**未完成（按行号倒序）→ 已完成（按行号倒序）**。
@@ -212,7 +212,7 @@ export function rankTodos<T extends Rankable>(items: readonly T[]): T[] {
     if (a.done !== b.done) return a.done ? 1 : -1
     if (a.line !== b.line) return b.line - a.line
     const byProject = a.project.localeCompare(b.project)
-    return byProject !== 0 ? byProject : a.topLevelDir.localeCompare(b.topLevelDir)
+    return byProject !== 0 ? byProject : a.typeDir.localeCompare(b.typeDir)
   })
 }
 
@@ -491,12 +491,12 @@ export function openSourceMessage(result: OpenSourceResult): {
  * 三条约定：
  * - 关键字为空 → 返回**全部**（打开列表就该看到所有候选，而不是一片空白）；
  * - 前后空白忽略（用户粘一个名字进来时末尾常带空格）；
- * - 同时匹配**项目名**与**顶级目录名**（"诉讼案件" 这样的大类词也能筛），大小写不敏感
+ * - 同时匹配**项目名**与**类型目录名**（"诉讼案件" 这样的大类词也能筛），大小写不敏感
  *   （对中文是空操作，对拼音 / 英文目录名有用）。
  *
  * 纯函数，返回新数组，不改动入参顺序——候选顺序由调用方给（host 的排序已经稳定）。
  */
-export function filterProjects<T extends { readonly project: string; readonly topLevelDir: string }>(
+export function filterProjects<T extends { readonly project: string; readonly typeDir: string }>(
   projects: readonly T[],
   keyword: string,
 ): T[] {
@@ -504,7 +504,84 @@ export function filterProjects<T extends { readonly project: string; readonly to
   if (needle.length === 0) return [...projects]
   return projects.filter(
     (row) =>
-      row.project.toLowerCase().includes(needle) || row.topLevelDir.toLowerCase().includes(needle),
+      row.project.toLowerCase().includes(needle) || row.typeDir.toLowerCase().includes(needle),
+  )
+}
+
+// ---------------------------------------------------------------------------
+// 目录设置：三级目录的多行文本 ↔ 字符串数组
+// ---------------------------------------------------------------------------
+
+/**
+ * 目录清单的**比较键**。
+ *
+ * Windows 的文件系统大小写不敏感，`L:\\法律工作` 与 `l:\\法律工作` 是同一个目录；
+ * 先做 `normalize` 是为了让 `L:\\甲\\` 与 `L:\\甲` 也判成同一个（用户从资源管理器
+ * 复制路径时，拖不拖末尾那根反斜杠全看心情）。中文没有大小写，这一步对中文路径是空操作，
+ * 对拼音 / 英文目录名才有用。
+ */
+function dirKeyOf(value: string): string {
+  return value.replaceAll('\\', '/').replace(/\/+$/, '').toLowerCase()
+}
+
+/**
+ * 多行文本 → 目录数组。
+ *
+ * 四条规则，顺序即语义：**按行拆分 → 去首尾空白 → 丢弃空行 → 保序去重**。
+ * 去重是**大小写不敏感**的（Windows），保留**第一次**出现的那个写法——用户敲的原文
+ * 才是他要的路径，后一条重复的只是手滑，不该把它顶到前面去。
+ *
+ * 纯函数，不碰磁盘也不抛错：路径存不存在由 host 校验（它才知道盘上的真相），
+ * 界面这一层只负责把"用户敲的东西"翻译成一个干净的数组。
+ */
+export function directoryListOf(text: string): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const raw of text.split(/\r?\n/)) {
+    const value = raw.trim()
+    if (value.length === 0) continue
+    const key = dirKeyOf(value)
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(value)
+  }
+  return out
+}
+
+/**
+ * 目录数组 → 多行文本（`directoryListOf` 的逆）。
+ *
+ * 一行一个，**原样保留**（不补反斜杠、不改大小写）：这一份是回填到输入框里的草稿，
+ * 用户上次怎么写的就该看到怎么写。
+ */
+export function directoryTextOf(values: readonly string[]): string {
+  return values.join('\n')
+}
+
+/**
+ * 目录设置表单的「保存」能不能按。
+ *
+ * 只有一种情况要拦住：**三级目录一个都没设定过**（`configured === false`），而用户又把
+ * 根目录清空了。host 会以「请填写根目录的路径。」拒绝，但那个提示要等一次往返才出现；
+ * 按不动按钮是更早、更安静的说明。
+ *
+ * 其余情况一律放行——包括"清空根目录、只留另行指定的目录"（那正是三级各自独立的意义）
+ * 与"只改颜色"（颜色走另一个按钮，不经过这里）。
+ */
+export function directorySaveDisabled(input: {
+  readonly saving: boolean
+  /** 保存前那一次总览里的受控状态：三级目录一个都没设 → `false`。 */
+  readonly wasConfigured: boolean
+  readonly rootDir: string
+  readonly extraTypeDirs: readonly string[]
+  readonly extraProjectDirs: readonly string[]
+}): boolean {
+  if (input.saving) return true
+  if (input.wasConfigured) return false
+  return !(
+    input.rootDir.trim().length > 0 ||
+    input.extraTypeDirs.length > 0 ||
+    input.extraProjectDirs.length > 0
   )
 }
 
@@ -523,10 +600,10 @@ export function filterProjects<T extends { readonly project: string; readonly to
 /** 新建的两种东西。 */
 export type ComposeKind = 'todo' | 'schedule'
 
-/** 项目的定位对（重名项目靠 `topLevelDir` 消歧）。 */
+/** 项目的定位对（重名项目靠 `typeDir` 消歧）。 */
 export interface ProjectRef {
   readonly project: string
-  readonly topLevelDir: string
+  readonly typeDir: string
 }
 
 /**
@@ -538,7 +615,7 @@ export interface ProjectRef {
 export interface ComposeRequest {
   readonly kind: ComposeKind
   readonly project?: string
-  readonly topLevelDir?: string
+  readonly typeDir?: string
   readonly priority?: Priority
   /** 日程的预填开始日期（日卡 / 周列 / 月格各自给出自己那一天的键）。 */
   readonly startDate?: string
@@ -550,7 +627,7 @@ export interface ComposeRequest {
 export interface ComposeDraft {
   readonly kind: ComposeKind
   readonly project: string
-  readonly topLevelDir: string
+  readonly typeDir: string
   readonly title: string
   /** `null` = 未设优先级（合法值，不是"还没选"）。 */
   readonly priority: Priority | null
@@ -566,10 +643,10 @@ export interface ComposeDraft {
  * 新建条目时默认写到哪个项目。
  *
  * **记忆优先**：待办线索是跨项目的，连着录三条时第二条不该再选一次案件。记忆里的项目
- * 已经不存在了（改名 / 删除 / 换了数据目录）就退回第一个——文件是唯一真相，
+ * 已经不存在了（改名 / 删除 / 换了目录设置）就退回第一个——文件是唯一真相，
  * 抱着一个指向已消失项目的记忆只会让"新建"必然失败。
  *
- * 一个项目都没有（还没设定数据目录、或目录里没有已就绪的项目）时返回 `null`，
+ * 一个项目都没有（还没设定目录、或目录里没有已就绪的项目）时返回 `null`，
  * 由调用方给出可执行的提示，而不是开一张注定写不进去的表单。
  */
 export function defaultComposeProject(
@@ -578,12 +655,12 @@ export function defaultComposeProject(
 ): ProjectRef | null {
   if (remembered !== null) {
     const hit = projects.find(
-      (row) => row.project === remembered.project && row.topLevelDir === remembered.topLevelDir,
+      (row) => row.project === remembered.project && row.typeDir === remembered.typeDir,
     )
-    if (hit !== undefined) return { project: hit.project, topLevelDir: hit.topLevelDir }
+    if (hit !== undefined) return { project: hit.project, typeDir: hit.typeDir }
   }
   const first = projects[0]
-  return first === undefined ? null : { project: first.project, topLevelDir: first.topLevelDir }
+  return first === undefined ? null : { project: first.project, typeDir: first.typeDir }
 }
 
 /** 由"点在哪儿"开出一份空白草稿；没地方可写（一个项目都没有）时返回 `null`。 */
@@ -592,17 +669,17 @@ export function composeDraftOf(
   fallback: ProjectRef | null,
   today: string,
 ): ComposeDraft | null {
-  // 项目是**成对**的：重名案件靠 `topLevelDir` 消歧，所以两个一起给才算指定了案件。
+  // 项目是**成对**的：重名案件靠 `typeDir` 消歧，所以两个一起给才算指定了案件。
   // 只给一半时整对退回兜底，免得拼出"乙案 + 诉讼案件"这种不存在的组合。
   const picked =
-    request.project !== undefined && request.topLevelDir !== undefined
-      ? { project: request.project, topLevelDir: request.topLevelDir }
+    request.project !== undefined && request.typeDir !== undefined
+      ? { project: request.project, typeDir: request.typeDir }
       : fallback
   if (picked === null) return null
   return {
     kind: request.kind,
     project: picked.project,
-    topLevelDir: picked.topLevelDir,
+    typeDir: picked.typeDir,
     title: '',
     priority: request.priority ?? null,
     note: '',
@@ -623,7 +700,7 @@ export function composeDraftOf(
  */
 export function composeEditBody(draft: ComposeDraft): Record<string, unknown> {
   const note = draft.note.trim()
-  const head = { project: draft.project, topLevelDir: draft.topLevelDir }
+  const head = { project: draft.project, typeDir: draft.typeDir }
   const common = {
     title: draft.title.trim(),
     ...(draft.priority === null ? {} : { priority: draft.priority }),

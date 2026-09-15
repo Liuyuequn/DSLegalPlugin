@@ -10,7 +10,8 @@
  *   当前界面能容纳的条目，只显示标题与完成状态。
  * - **项目**：按案件读。先列全部项目，点进某个项目看它的全部待办与日程。
  *
- * 另有「使用说明」入口（盖在面板之上的说明界面，不是第四条线索）与「数据目录」表单。
+ * 另有「使用说明」入口（盖在面板之上的说明界面，不是第四条线索）与「插件设置」里的
+ * **目录设置**（根目录 / 另行指定的类型目录 / 另行指定的项目目录）与四象限颜色。
  *
  * ## 数据
  *
@@ -73,6 +74,8 @@ import {
   composeEditBody,
   composeError as validateCompose,
   defaultComposeProject,
+  directoryListOf,
+  directoryTextOf,
   openSourceMessage,
   todayKey,
   type ComposeDraft,
@@ -153,7 +156,7 @@ const LENSES: readonly { readonly key: Lens; readonly label: string; readonly hi
 ]
 
 /** 项目详情的当前项目。 */
-type Scope = { readonly project: string; readonly topLevelDir: string } | null
+type Scope = { readonly project: string; readonly typeDir: string } | null
 
 interface SlotsLike {
   inject(name: string, callback: () => void): void
@@ -206,9 +209,9 @@ function readComposeProject(): ProjectRef | null {
     if (raw === null) return null
     const parsed: unknown = JSON.parse(raw)
     if (typeof parsed !== 'object' || parsed === null) return null
-    const { project, topLevelDir } = parsed as { project?: unknown; topLevelDir?: unknown }
-    if (typeof project !== 'string' || typeof topLevelDir !== 'string') return null
-    return { project, topLevelDir }
+    const { project, typeDir } = parsed as { project?: unknown; typeDir?: unknown }
+    if (typeof project !== 'string' || typeof typeDir !== 'string') return null
+    return { project, typeDir }
   } catch {
     return null
   }
@@ -347,21 +350,40 @@ function Workbench(): JSX.Element {
   const [cursor, setCursor] = useState(() => todayKey())
   const [scope, setScope] = useState<Scope>(null)
   const [overview, setOverview] = useState<Overview | null>(null)
+  /**
+   * 三级目录是否已设定（只设了「另行指定的项目目录」也算已配置）。
+   *
+   * 与 `overview` 分开存：`overview` 在开始时是 `null`，而「保存」按钮的禁用判断用得到
+   * 这个受控状态（一个目录都没设过时，根目录不能留空）。
+   */
+  const [configured, setConfigured] = useState(false)
   const [agenda, setAgenda] = useState<Agenda | null>(null)
   const [loading, setLoading] = useState(false)
   const [banner, setBanner] = useState<{ kind: 'info' | 'warn'; text: string } | null>(null)
   const [optimistic, setOptimistic] = useState<Record<string, boolean>>({})
   const [hover, setHover] = useState<string | null>(null)
-  const [dataRoot, setDataRoot] = useState<string | null>(null)
-  /** 数据目录表单：未设定时自动进入；已设定时由「数据目录」按钮进入。 */
+  /** 当前生效的根目录（顶部「插件设置」按钮的 title 用）。 */
+  const [rootDir, setRootDir] = useState<string | null>(null)
+  /** 目录设置表单：三级目录一个都没设定时自动进入；否则由「插件设置」按钮进入。 */
   const [setup, setSetup] = useState(false)
-  const [pathDraft, setPathDraft] = useState('')
+  /**
+   * 目录设置的三份草稿。
+   *
+   * 三级目录**各自独立**，所以是三份受控值而不是一份路径：根目录是单行文本，另外两份是
+   * 「一行一个绝对路径」的多行文本（多行文本 ↔ 数组的转换是 `view.ts` 的
+   * `directoryListOf`，纯函数有单测）。初值取自总览（`getOverview` 保证三个字段有值）。
+   */
+  const [dirDraft, setDirDraft] = useState<{
+    readonly rootDir: string
+    readonly extraTypeDirs: string
+    readonly extraProjectDirs: string
+  }>(() => ({ rootDir: '', extraTypeDirs: '', extraProjectDirs: '' }))
   const [pathError, setPathError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   /**
    * 四象限颜色的草稿。
    *
-   * 与数据目录分开保存：两件事互不依赖，合成一个「保存」会让"只想换个颜色"的人
+   * 与目录设置分开保存：两件事互不依赖，合成一个「保存」会让"只想换个颜色"的人
    * 也被路径校验拦住。草稿初值取当前生效值，保存成功后用服务端回的值覆盖
    * （服务端会把非法颜色逐键兜底成默认色，回值才是真相）。
    */
@@ -534,14 +556,23 @@ function Workbench(): JSX.Element {
     try {
       const next = await getOverview()
       setOverview(next)
-      setDataRoot(next.dataRoot)
+      setRootDir(next.rootDir)
+      setConfigured(next.configured)
+      // 目录草稿跟随服务端（`getOverview` 对旧 host 已把三个字段降级成 null / []）。
+      // 只在"还没有草稿"时跟随：`refresh` 会被「数据刷新」「勾选」「新建」反复触发，
+      // 每次都覆盖会把用户正在敲的路径掀掉（与颜色草稿同一条规矩）。
+      setDirDraft((draft) =>
+        draft.rootDir.length === 0 && next.rootDir !== null
+          ? { ...draft, rootDir: next.rootDir }
+          : draft,
+      )
       // 草稿只在"还没草稿"或"草稿与服务端一致"时跟随服务端，不覆盖用户正在编辑的值。
       setColorDraft((draft) => draft ?? next.priorityColors)
       // host 较旧（没下发颜色）：面板照常可用，但要说清楚自定义颜色这次没生效。
       if (next.colorsUnavailable === true) {
         setBanner({ kind: 'warn', text: HOST_OUTDATED_COLORS })
       }
-      // 未设定数据目录：界面只显示路径输入框（数据来源未知时其余功能无意义）。
+      // 未设定三级目录：界面改显目录设置表单（数据来源未知时其余功能无意义）。
       if (!next.configured) {
         setSetup(true)
         setPathError(null)
@@ -553,19 +584,45 @@ function Workbench(): JSX.Element {
     }
   }, [])
 
-  /** 打开设置页：把草稿对齐到当前生效值，并取一次出厂默认色。 */
+  /**
+   * 打开设置页：把三份目录草稿与颜色草稿都对齐到当前生效值，并取一次出厂默认色。
+   *
+   * **旧 host 的降级路径本身也要防崩**（实测踩过：颜色那一版曾直接信
+   * `/dslegal/settings`，`colors[优先级]` 索引 `undefined`，React 整棵子树抛错、
+   * 面板连 `aside` 都不剩）。所以这里两条规矩：
+   *
+   * 1. 目录草稿先落到**总览**那一份——`getOverview` 已保证三个字段有值（缺了就降级成
+   *    `null` / `[]`），不依赖设置接口；
+   * 2. `/dslegal/settings` 回来的字段**只在确实存在时**才覆盖草稿（逐字段判 `undefined`。
+   *    判断用 `undefined` 而不是"真假"：`''` 与 `[]` 都是合法的"已清空"）。
+   */
   const openSetup = useCallback(async () => {
     setPathError(null)
     setColorError(null)
     setSetup(true)
-    // 颜色草稿先落到总览里的那一份（它**一定有值**：`getOverview` 对旧 host 会兜底成
-    // 默认色）。别指望 `/dslegal/settings`——旧 host 不返回颜色字段，直接信它会渲染成
-    // `undefined[优先级]` 并把整个面板带崩（实测踩过）。
+    // 颜色草稿先落到总览里的那一份（它**一定有值**：`getOverview` 对旧 host 会兜底成默认色）。
     setColorDraft((draft) => draft ?? overview?.priorityColors ?? null)
+    setDirDraft({
+      rootDir: overview?.rootDir ?? '',
+      extraTypeDirs: directoryTextOf(overview?.extraTypeDirs ?? []),
+      extraProjectDirs: directoryTextOf(overview?.extraProjectDirs ?? []),
+    })
     try {
       const settings = await getSettings()
       if (settings.priorityColors !== undefined) setColorDraft(settings.priorityColors)
       setDefaultColors(settings.defaultPriorityColors ?? null)
+      // 逐字段判：旧 host 的响应里这些键根本不存在，覆盖上去就是"把用户配好的目录清空"。
+      setDirDraft((draft) => ({
+        rootDir: settings.rootDir === undefined || settings.rootDir === null ? draft.rootDir : settings.rootDir,
+        extraTypeDirs:
+          settings.extraTypeDirs === undefined
+            ? draft.extraTypeDirs
+            : directoryTextOf(settings.extraTypeDirs),
+        extraProjectDirs:
+          settings.extraProjectDirs === undefined
+            ? draft.extraProjectDirs
+            : directoryTextOf(settings.extraProjectDirs),
+      }))
     } catch {
       // 取不到就沿用上面那一份——设置页不该因为这一路失败而打不开。
     }
@@ -617,7 +674,7 @@ function Workbench(): JSX.Element {
       return
     }
     let cancelled = false
-    void getAgenda(scope.project, scope.topLevelDir)
+    void getAgenda(scope.project, scope.typeDir)
       .then((next) => {
         if (!cancelled) setAgenda(next)
       })
@@ -629,15 +686,37 @@ function Workbench(): JSX.Element {
     }
   }, [open, scope])
 
-  const saveDataRoot = useCallback(async () => {
-    const value = pathDraft.trim()
-    if (value.length === 0) return
+  /**
+   * 保存目录设置：**一次 POST 三个字段**。
+   *
+   * 为什么一次全送而不是"只送改过的那一项"：三块同属一张表单、只有一个「保存」按钮，
+   * 用户按下去的意思是"表单现在这样"。host 的接口本来就是**部分保存**（缺席的键保持
+   * 原值），所以缺省字段照送也不会误伤别处——反倒是"只送改过的"要求界面自己判断
+   * "哪一项改了"，那份判断一旦错了，用户改的东西就静默没保存。
+   *
+   * `rootDir` 送**空串**表示清空（host 明确定义的语义）：既然按钮按得动，就说明用户
+   * 要么保留着已配置的目录、要么另填了目录，清空根目录是正当操作，不该被界面吞掉。
+   *
+   * 与颜色保存同一套路：**服务端回值才是真相**（它会把路径规范化、把不存在的目录拦掉），
+   * 草稿用回值覆盖，再 `refresh()` 让总览跟着变。
+   */
+  const saveRootDir = useCallback(async () => {
     setSaving(true)
     setPathError(null)
+    const extraTypeDirs = directoryListOf(dirDraft.extraTypeDirs)
+    const extraProjectDirs = directoryListOf(dirDraft.extraProjectDirs)
     try {
-      const saved = await postSettings({ dataRoot: value })
-      setDataRoot(saved.dataRoot)
-      setPathDraft(saved.dataRoot ?? value)
+      const saved = await postSettings({
+        rootDir: dirDraft.rootDir.trim(),
+        extraTypeDirs,
+        extraProjectDirs,
+      })
+      setRootDir(saved.rootDir)
+      setDirDraft({
+        rootDir: saved.rootDir ?? '',
+        extraTypeDirs: directoryTextOf(saved.extraTypeDirs),
+        extraProjectDirs: directoryTextOf(saved.extraProjectDirs),
+      })
       setSetup(false)
       await refresh()
     } catch (cause) {
@@ -645,13 +724,13 @@ function Workbench(): JSX.Element {
     } finally {
       setSaving(false)
     }
-  }, [pathDraft, refresh])
+  }, [dirDraft, refresh])
 
   /** 保存四象限颜色；服务端回值才是真相（非法值会被逐键兜底成默认色）。 */
   const saveColors = useCallback(async () => {
     if (colorDraft === null) return
-    // host 较旧时连请求都不必发：旧 host 的 POST 只认 dataRoot，会回一句
-    // 「缺少 dataRoot。」——那个提示对用户毫无意义，直接给可执行的说明。
+    // host 较旧时连请求都不必发：旧 host 的 POST 只认 rootDir，会回一句
+    // 「缺少 rootDir。」——那个提示对用户毫无意义，直接给可执行的说明。
     if (overview?.colorsUnavailable === true) {
       setColorError(HOST_OUTDATED_COLORS)
       return
@@ -680,7 +759,7 @@ function Workbench(): JSX.Element {
   const toggle = useCallback(
     async (input: {
       readonly kind: 'todo' | 'schedule'
-      readonly row: { readonly project: string; readonly topLevelDir: string; readonly line: number; readonly title: string; readonly done: boolean }
+      readonly row: { readonly project: string; readonly typeDir: string; readonly line: number; readonly title: string; readonly done: boolean }
     }) => {
       const key = keyOf(input.row.project, input.row.line)
       const next = !input.row.done
@@ -695,7 +774,7 @@ function Workbench(): JSX.Element {
         await postEdit({
           op: input.kind === 'todo' ? 'todo.set' : 'schedule.set',
           project: input.row.project,
-          topLevelDir: input.row.topLevelDir,
+          typeDir: input.row.typeDir,
           target: { line: input.row.line, title: input.row.title },
           input: { done: next },
         })
@@ -751,21 +830,21 @@ function Workbench(): JSX.Element {
    *
    * 三件事：
    *
-   * 1. **只送 project + line**，路径由 host 解析（它才知道数据根目录；界面能传路径的话，
+   * 1. **只送 project + line**，路径由 host 解析（它才知道根目录；界面能传路径的话，
    *    这个接口就成了"启动任意本机程序"的后门）。
    * 2. **窗不关**：打开的是外部编辑器，用户回来大概率还要接着看这条日程（或改状态）。
    * 3. **结果如实报**：跳行没跳成、文件已被外部改过，都要在横幅里说出来。
    */
   const openSource = useCallback(async (row: {
     readonly project: string
-    readonly topLevelDir: string
+    readonly typeDir: string
     readonly line: number
     readonly kind: 'schedule' | 'todo'
   }) => {
     try {
       const result = await postOpenSource({
         project: row.project,
-        topLevelDir: row.topLevelDir,
+        typeDir: row.typeDir,
         kind: row.kind,
         line: row.line,
       })
@@ -798,7 +877,7 @@ function Workbench(): JSX.Element {
     if (draft === null) {
       setBanner({
         kind: 'warn',
-        text: '没有找到已就绪的项目，无法新建。已就绪 = 存在「<数据根目录>/<顶级目录>/<项目>/0. 协作/1. 工作日志.md」。',
+        text: '没有找到已就绪的项目，无法新建。已就绪 = 存在「<根目录>/<类型目录>/<项目目录>/0. 协作/1. 工作日志.md」。',
       })
       return
     }
@@ -820,9 +899,9 @@ function Workbench(): JSX.Element {
     setComposeError(null)
     try {
       await postEdit(composeEditBody(compose.draft))
-      const { kind, project, topLevelDir, title } = compose.draft
-      writeComposeProject({ project, topLevelDir })
-      composeMemoryRef.current = { project, topLevelDir }
+      const { kind, project, typeDir, title } = compose.draft
+      writeComposeProject({ project, typeDir })
+      composeMemoryRef.current = { project, typeDir }
       setCompose(null)
       setBanner({
         kind: 'info',
@@ -969,8 +1048,8 @@ function Workbench(): JSX.Element {
           <header style={UI.topBar}>
             {setup ? (
               <>
-                {/* 只写「插件设置」：这个子页现在装的是数据目录 + 四象限颜色两块，
-                    标题里再缀一个「· 数据目录」会让人以为只有那一件事。 */}
+                {/* 只写「插件设置」：这个子页现在装的是目录设置（三级目录）+ 四象限颜色两块，
+                    标题里再缀一个「· 目录设置」会让人以为只有那一件事。 */}
                 <span style={UI.sectionTitle}>插件设置</span>
                 <span style={{ flex: 1 }} />
                 {/* 设置子页只留一个出口。这里原本还有一个「使用说明」，但设置页是
@@ -1024,14 +1103,17 @@ function Workbench(): JSX.Element {
                 >
                   使用说明
                 </button>
+                {/* 悬停提示只放根目录：三级目录一起塞进来会是一长串路径，
+                    而根目录是其中最常被核对的那一个。 */}
                 <button
                   type="button"
                   style={UI.textButton(hover === 'data-root')}
-                  title={dataRoot ?? ''}
+                  title={rootDir ?? ''}
                   onMouseEnter={() => setHover('data-root')}
                   onMouseLeave={() => setHover(null)}
                   onClick={() => {
-                    setPathDraft(dataRoot ?? '')
+                    // 草稿的对齐在 `openSetup` 里做（它才是唯一知道"三级目录现在各是什么"
+                    // 的地方，还会读一次 `/dslegal/settings`）。
                     void openSetup()
                   }}
                 >
@@ -1075,14 +1157,28 @@ function Workbench(): JSX.Element {
           >
             {setup ? (
               <SetupForm
-                value={pathDraft}
+                value={dirDraft.rootDir}
+                extraTypeDirs={dirDraft.extraTypeDirs}
+                extraProjectDirs={dirDraft.extraProjectDirs}
                 error={pathError}
                 saving={saving}
-                canCancel={dataRoot !== null}
+                configUnset={!configured}
+                canCancel={rootDir !== null}
                 hover={hover}
                 setHover={setHover}
-                onChange={setPathDraft}
-                onSave={() => void saveDataRoot()}
+                onChange={(value) => {
+                  setDirDraft((draft) => ({ ...draft, rootDir: value }))
+                  setPathError(null)
+                }}
+                onChangeTypeDirs={(value) => {
+                  setDirDraft((draft) => ({ ...draft, extraTypeDirs: value }))
+                  setPathError(null)
+                }}
+                onChangeProjectDirs={(value) => {
+                  setDirDraft((draft) => ({ ...draft, extraProjectDirs: value }))
+                  setPathError(null)
+                }}
+                onSave={() => void saveRootDir()}
                 onCancel={() => {
                   setSetup(false)
                   setPathError(null)

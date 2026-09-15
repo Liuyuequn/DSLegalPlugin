@@ -621,9 +621,9 @@ describe('打开原始 markdown：只送项目与行号，不送路径', () => {
     return end < 0 ? rest : rest.slice(0, end)
   }
 
-  it('请求体只带 project / topLevelDir / kind / line', () => {
+  it('请求体只带 project / typeDir / kind / line', () => {
     const body = openBody()
-    for (const field of ['project', 'topLevelDir', 'kind', 'line']) {
+    for (const field of ['project', 'typeDir', 'kind', 'line']) {
       expect(body, `请求体应当带上 ${field}`).toContain(field)
     }
     expect(body, '**绝不接受调用方给的路径**：能开任意文件的接口等于启动任意程序的后门').not.toMatch(
@@ -1032,5 +1032,174 @@ describe('使用说明：折叠式与排序', () => {
     // 必须把边框说全"那条守卫（写 'none'，不是省略）。
     expect(UI.helpToggle(false, false).border).toBe('none')
     expect(UI.helpSection.border, '卡片的框在外层').toBe(`1px solid ${T.border1}`)
+  })
+})
+
+/**
+ * 目录设置表单：**三级目录各自独立**。
+ *
+ * 这是"三级可各自独立设定"这条需求在界面上的落点，两个地方都容易悄悄退化：
+ *
+ * 1. **三个输入少一个**——退化成"只填根目录"，另外两级就只能靠目录树放在根目录下面，
+ *    而用户要的正是"可以指向根目录之外"；
+ * 2. **请求体多了键**——`/dslegal/settings` 的 POST 的语义是"没传的键保持原值"，
+ *    多送一个它不认识的键轻则被忽略、重则整个请求被打回；少送一个键则那一项静默不保存。
+ */
+describe('插件设置：目录设置表单（三级目录各自独立）', () => {
+  const VIEWS = readFileSync(new URL('../src/views.tsx', import.meta.url), 'utf8')
+  const CLIENT = readFileSync(new URL('../src/client.tsx', import.meta.url), 'utf8')
+
+  /** 抠出 `SetupForm` 的函数体（到下一个顶层 `function` / `export` 为止）。 */
+  const setupForm = (): string => {
+    const start = VIEWS.indexOf('export function SetupForm(')
+    expect(start, '找不到 SetupForm，说明结构变了，请同步这个守卫').toBeGreaterThan(-1)
+    const rest = VIEWS.slice(start)
+    const end = rest.search(/\n(\/\*\*|function |export function |const )/)
+    return end < 0 ? rest : rest.slice(0, end)
+  }
+
+  it('三块输入都在：根目录是单行 input，两份清单是多行 textarea', () => {
+    const form = setupForm()
+    expect(form, '根目录的单行输入不见了').toContain('value={props.value}')
+    expect(form, '少一块：另行指定的类型目录').toContain('另行指定的类型目录')
+    expect(form, '少一块：另行指定的项目目录').toContain('另行指定的项目目录')
+    expect((form.match(/<textarea/g) ?? []).length, '两份清单各是一个 textarea').toBe(2)
+    // 每块都要有名字：三个 aria-label 必须互不相同，否则测试与读屏都分不出是哪一块。
+    const labels = [...form.matchAll(/aria-label="([^"]+)"/g)].map((m) => m[1]!)
+    expect(labels).toContain('根目录')
+    expect(labels).toContain('另行指定的类型目录（一行一个）')
+    expect(labels).toContain('另行指定的项目目录（一行一个）')
+    expect(new Set(labels).size, '两个输入用了同一个 aria-label').toBe(labels.length)
+  })
+
+  it('多行文本的解析走 view.ts 的纯函数，表单里不自己 split', () => {
+    const form = setupForm()
+    expect(form, '保存时没有解析多行文本').toContain('directoryListOf(')
+    expect(form, '禁用判断也用了另一份解析实现').toContain('directoryListOf(props.extraTypeDirs)')
+    // 反面：表单里自己按行拆 / 自己去重，就会出现第二份会走样的实现。
+    expect(form, '表单里又写了一套按行拆分').not.toContain(".split('\\n')")
+    expect(form, '表单里又写了一套 split(/').not.toContain('split(/')
+  })
+
+  /**
+   * 从源码里抠出某一次 `postSettings({...})` 的实参文本。
+   *
+   * 用**括号配对**而不是找 `})`：实参列表里的箭头函数自己就会写出 `})`
+   * （`setDraft((prev) => ({ ...prev }))` 那种），拿第一个 `})` 去切会切早；
+   * 拿"两个空格缩进的收尾"去切又会切晚——后面的代码里全是这个缩进。
+   */
+  const postSettingsBody = (source: string, from: number): string[] => {
+    const start = source.indexOf('postSettings(', from)
+    expect(start, '找不到 postSettings 调用').toBeGreaterThan(-1)
+    const rest = source.slice(start)
+    let depth = 0
+    let end = -1
+    for (let index = 0; index < rest.length; index += 1) {
+      const char = rest[index]
+      if (char === '{') depth += 1
+      else if (char === '}') {
+        depth -= 1
+        // 实参列表本身是 `({ … })`，所以这个 `}` 把 depth 收回 0 时就是它的末尾。
+        if (depth === 0) {
+          end = index + 1
+          break
+        }
+      }
+    }
+    expect(end, 'postSettings 的实参没有闭合，源码结构变了，请同步这个守卫').toBeGreaterThan(0)
+    return rest.slice(0, end).split('\n')
+  }
+
+  /**
+   * 实参里**第一层**的键。两种写法都要认：`key: 值` 与简写 `key,`。
+   *
+   * 三个坑都踩过，所以这里刻意不用正则：
+   * - 行尾的 `\r` 要显式吃掉——工作区是 CRLF，`/…$/` 在 `\r` 前面不匹配；
+   * - 缩进要一起看。只按"行首是标识符"匹配会钻进嵌套对象里，把下一层的键也算进来，
+   *   所以以**第一层元素们的缩进**（各行里最小的那个）为界，只收它这一档；
+   * - 先 `trimStart()` 再找冒号：`postSettings({` 后面的对象字面量左花括号必须先剥掉，
+   *   否则 `trimStart()` 停在 `{` 上、冒号前面那一段是 `{ priorityColors`（实测踩过）。
+   */
+  const bodyKeys = (lines: readonly string[]): string[] => {
+    const head = lines[0] ?? ''
+    // 实参若与 `postSettings(` 同行（写成一行的那种），从**对象字面量的 `{` 之后**开始看。
+    const first = head.slice(head.indexOf('{') + 1)
+    const letters = (text: string): boolean => {
+      if (text.length === 0) return false
+      for (const char of text) {
+        if (!((char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z'))) return false
+      }
+      return true
+    }
+    const found: { indent: number; key: string }[] = []
+    for (const line of [first, ...lines.slice(1)]) {
+      const indent = line.length - line.trimStart().length
+      const text = line.trimStart()
+      const colon = text.indexOf(':')
+      if (colon > 0 && letters(text.slice(0, colon))) {
+        found.push({ indent, key: text.slice(0, colon) })
+        continue
+      }
+      const comma = text.indexOf(',')
+      const key = comma < 0 ? text : text.slice(0, comma)
+      if (comma >= 0 && letters(key)) found.push({ indent, key })
+    }
+    if (found.length === 0) return []
+    const base = Math.min(...found.map((item) => item.indent))
+    return found.filter((item) => item.indent === base).map((item) => item.key)
+  }
+
+  it('保存时三个字段一次送出，请求体只允许那四个键', () => {
+    const start = CLIENT.indexOf('const saveRootDir = useCallback')
+    const save = CLIENT.slice(start, CLIENT.indexOf('const saveColors = useCallback'))
+    expect(start, '找不到 saveRootDir').toBeGreaterThan(-1)
+    expect(save.length, '找不到 saveRootDir').toBeGreaterThan(0)
+    expect(save, '目录没有一起送出去').toContain('extraTypeDirs,')
+    expect(save, '目录没有一起送出去').toContain('extraProjectDirs,')
+    // `rootDir` 送空串表示清空（host 的语义），所以这里不该有"空就不送"的短路。
+    expect(save, 'rootDir 被条件省略了，清空根目录就送不出去').toContain('rootDir: dirDraft.rootDir.trim()')
+
+    // 请求体的键**逐个写死**地核一遍：允许的只有 host 文档里那四个。
+    const lines = postSettingsBody(save, 0)
+    const keys = bodyKeys(lines)
+    expect(
+      keys.filter((key) => !['rootDir', 'extraTypeDirs', 'extraProjectDirs', 'priorityColors'].includes(key)),
+      `目录保存的请求体里出现了不被允许的键：${keys.join(' / ')}`,
+    ).toEqual([])
+    // 三级目录一个都不能少：少送一个键＝那一项静默不保存。
+    expect(keys, `没解析到请求体的键，实际内容：\n${lines.join('\n')}`).toEqual([
+      'rootDir',
+      'extraTypeDirs',
+      'extraProjectDirs',
+    ])
+  })
+
+  it('颜色保存只送 priorityColors（两块各自独立保存）', () => {
+    const start = CLIENT.indexOf('const saveColors = useCallback')
+    expect(start, '找不到 saveColors').toBeGreaterThan(-1)
+    const body = postSettingsBody(CLIENT, start).join('\n')
+    expect(body, '颜色没有被送出去').toContain('priorityColors')
+    expect(bodyKeys(body.split('\n')), `颜色保存的键集合不对，实参：${body}`).toEqual([
+      'priorityColors',
+    ])
+    expect(body, '颜色保存顺手改了目录').not.toContain('rootDir')
+    expect(body, '颜色保存顺手改了目录').not.toContain('extraTypeDirs')
+  })
+
+  it('打开设置时逐字段覆盖草稿：旧 host 缺哪个键就不动哪个草稿', () => {
+    const open = CLIENT.slice(
+      CLIENT.indexOf('const openSetup = useCallback'),
+      CLIENT.indexOf('useEffect(() => {\n    if (!open) return'),
+    )
+    expect(open.length, '找不到 openSetup').toBeGreaterThan(0)
+    // 逐字段判 `undefined`：旧 host 的响应里这些键根本不存在，直接覆盖＝把用户配好的目录清空。
+    expect(open, '设置接口回来的目录没做存在性判断').toContain('settings.rootDir === undefined')
+    expect(open, '设置接口回来的目录没做存在性判断').toContain('settings.extraTypeDirs === undefined')
+    expect(open, '设置接口回来的目录没做存在性判断').toContain(
+      'settings.extraProjectDirs === undefined',
+    )
+    expect(open, '草稿没有先落到总览那一份（getOverview 保证有值）').toContain(
+      'directoryTextOf(overview?.extraTypeDirs ?? [])',
+    )
   })
 })

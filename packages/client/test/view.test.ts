@@ -12,6 +12,9 @@ import {
   dayKey,
   dayLabel,
   defaultComposeProject,
+  directoryListOf,
+  directorySaveDisabled,
+  directoryTextOf,
   filterProjects,
   fullDateLabel,
   fitRows,
@@ -49,14 +52,14 @@ let seq = 0
 
 function todo(over: Partial<TodoRow> & { readonly title: string }): TodoRow {
   seq += 1
-  return { project: '甲案', topLevelDir: '诉讼案件', line: seq, done: false, ...over }
+  return { project: '甲案', typeDir: '诉讼案件', line: seq, done: false, ...over }
 }
 
 function sched(over: Partial<ScheduleRow> & { readonly startDate: string }): ScheduleRow {
   seq += 1
   return {
     project: '甲案',
-    topLevelDir: '诉讼案件',
+    typeDir: '诉讼案件',
     category: '民事诉讼',
     ongoing: false,
     line: seq,
@@ -383,6 +386,75 @@ describe('文案', () => {
 })
 
 /**
+ * 目录设置的多行文本解析。
+ *
+ * 这是"用户敲的东西"到"送去 host 的数组"之间唯一的一步，四件事都会静默出错：
+ * 行尾的回车没去掉 → host 说目录不存在；空行没丢 → 空路径被判成非法；重复项没去 →
+ * 同一目录在界面上列两遍；顺序被打乱 → 用户按自己的思路排的清单每次都跳。
+ */
+describe('目录设置：多行文本 ↔ 数组', () => {
+  it('按行拆分、去首尾空白、丢弃空行', () => {
+    expect(directoryListOf('  L:\\甲  \n\n   \nL:\\乙\n')).toEqual(['L:\\甲', 'L:\\乙'])
+  })
+
+  it('CRLF 也认（从记事本 / 资源管理器粘进来的是 \\r\\n）', () => {
+    expect(directoryListOf('L:\\甲\r\nL:\\乙\r\n')).toEqual(['L:\\甲', 'L:\\乙'])
+  })
+
+  it('保序去重，且保留第一次出现的写法', () => {
+    expect(directoryListOf('L:\\乙\nL:\\甲\nL:\\乙')).toEqual(['L:\\乙', 'L:\\甲'])
+  })
+
+  it('去重是大小写不敏感的（Windows），并对末尾反斜杠宽容', () => {
+    expect(directoryListOf('L:\\法律工作\nl:\\法律工作\nL:\\法律工作\\')).toEqual(['L:\\法律工作'])
+    expect(directoryListOf('L:\\甲/乙\nL:\\甲\\乙')).toEqual(['L:\\甲/乙'])
+  })
+
+  it('空文本 / 全是空行 → 空数组（＝不另设）', () => {
+    expect(directoryListOf('')).toEqual([])
+    expect(directoryListOf('\n\n   \n')).toEqual([])
+    expect(directoryTextOf([])).toBe('')
+  })
+
+  it('数组 → 文本一行一个，原样保留（回填草稿不该改用户的写法）', () => {
+    expect(directoryTextOf(['L:\\甲', 'L:\\乙'])).toBe('L:\\甲\nL:\\乙')
+    expect(directoryListOf(directoryTextOf(['L:\\甲\\', 'L:\\乙']))).toEqual(['L:\\甲\\', 'L:\\乙'])
+  })
+
+  it('保存按钮：三级目录一个都没设过时，根目录不能空', () => {
+    const base = { saving: false, wasConfigured: false, rootDir: '', extraTypeDirs: [], extraProjectDirs: [] }
+    expect(directorySaveDisabled(base)).toBe(true)
+    expect(directorySaveDisabled({ ...base, rootDir: '  L:\\法律工作  ' })).toBe(false)
+    // 只设了「另行指定的项目目录」也算配置了（host 的 configured 就是这么判的）。
+    expect(directorySaveDisabled({ ...base, extraProjectDirs: ['L:\\甲'] })).toBe(false)
+  })
+
+  it('保存按钮：已经配好了就允许清空根目录（三级各自独立的意义所在）', () => {
+    expect(
+      directorySaveDisabled({
+        saving: false,
+        wasConfigured: true,
+        rootDir: '',
+        extraTypeDirs: [],
+        extraProjectDirs: [],
+      }),
+    ).toBe(false)
+  })
+
+  it('保存中一律按不动', () => {
+    expect(
+      directorySaveDisabled({
+        saving: true,
+        wasConfigured: true,
+        rootDir: 'L:\\法律工作',
+        extraTypeDirs: [],
+        extraProjectDirs: [],
+      }),
+    ).toBe(true)
+  })
+})
+
+/**
  * 日程明细悬浮窗。
  *
  * 用户的要求是"细化到「日程」这个维度"：点到某一条就把**那一条**的信息弹出来，
@@ -520,8 +592,8 @@ describe('日程明细：落点', () => {
  * 界面说没问题、写下去被打回来，而这种错位在没有网络延迟的本地环境里最难发现。
  */
 describe('新建条目：点在哪儿决定预填什么', () => {
-  const 甲案: ProjectRef = { project: '甲案', topLevelDir: '诉讼案件' }
-  const 乙案: ProjectRef = { project: '乙案', topLevelDir: '法律顾问' }
+  const 甲案: ProjectRef = { project: '甲案', typeDir: '诉讼案件' }
+  const 乙案: ProjectRef = { project: '乙案', typeDir: '法律顾问' }
   const anchor = { left: 100, top: 200, right: 100, bottom: 200 }
 
   it('项目记忆优先，但记忆里的项目没了就退回第一个（文件是唯一真相）', () => {
@@ -529,15 +601,15 @@ describe('新建条目：点在哪儿决定预填什么', () => {
     expect(defaultComposeProject([甲案, 乙案], null)).toEqual(甲案)
     // 记忆指向一个已经改名 / 删除的项目：不能抱着它不放，否则新建必然失败。
     expect(
-      defaultComposeProject([甲案], { project: '已删除的案件', topLevelDir: '诉讼案件' }),
+      defaultComposeProject([甲案], { project: '已删除的案件', typeDir: '诉讼案件' }),
     ).toEqual(甲案)
-    // 同名不同顶级目录也要认准（重名项目靠 topLevelDir 消歧）。
+    // 同名不同类型目录也要认准（重名项目靠 typeDir 消歧）。
     expect(
-      defaultComposeProject([甲案, { project: '甲案', topLevelDir: '法律顾问' }], {
+      defaultComposeProject([甲案, { project: '甲案', typeDir: '法律顾问' }], {
         project: '甲案',
-        topLevelDir: '法律顾问',
+        typeDir: '法律顾问',
       }),
-    ).toEqual({ project: '甲案', topLevelDir: '法律顾问' })
+    ).toEqual({ project: '甲案', typeDir: '法律顾问' })
     expect(defaultComposeProject([], 乙案)).toBeNull()
   })
 
@@ -550,7 +622,7 @@ describe('新建条目：点在哪儿决定预填什么', () => {
     expect(fromQuadrant).toMatchObject({
       kind: 'todo',
       project: '甲案',
-      topLevelDir: '诉讼案件',
+      typeDir: '诉讼案件',
       priority: '重要且紧急',
       title: '',
       note: '',
@@ -577,11 +649,11 @@ describe('新建条目：点在哪儿决定预填什么', () => {
 
   it('项目详情里点的：案件锁死，不落到"上次用过的项目"上', () => {
     const draft = composeDraftOf(
-      { kind: 'todo', project: '乙案', topLevelDir: '法律顾问', anchor },
+      { kind: 'todo', project: '乙案', typeDir: '法律顾问', anchor },
       甲案,
       '2026-09-12',
     )
-    expect(draft).toMatchObject({ project: '乙案', topLevelDir: '法律顾问' })
+    expect(draft).toMatchObject({ project: '乙案', typeDir: '法律顾问' })
   })
 
   it('一个项目都没有时不给草稿（绝不摆一张注定写不进去的表单）', () => {
@@ -601,9 +673,9 @@ describe('新建条目：点在哪儿决定预填什么', () => {
  */
 describe('新建窗：项目候选的筛选', () => {
   const 案件 = [
-    { project: '办理中_20260101 某某公司 诉 某某某 侵害著作权、不正当竞争 案', topLevelDir: '诉讼案件' },
-    { project: '王五诉赵六房屋租赁合同纠纷案', topLevelDir: '诉讼案件' },
-    { project: '某某公司常年法律顾问', topLevelDir: '法律顾问' },
+    { project: '办理中_20260101 某某公司 诉 某某某 侵害著作权、不正当竞争 案', typeDir: '诉讼案件' },
+    { project: '王五诉赵六房屋租赁合同纠纷案', typeDir: '诉讼案件' },
+    { project: '某某公司常年法律顾问', typeDir: '法律顾问' },
   ]
 
   it('关键字为空 = 全部候选（打开列表就该看到所有项目，不是一片空白）', () => {
@@ -623,7 +695,7 @@ describe('新建窗：项目候选的筛选', () => {
     ])
   })
 
-  it('顶级目录名也能筛（用户可能只记得"法律顾问"这一层）', () => {
+  it('类型目录名也能筛（用户可能只记得"法律顾问"这一层）', () => {
     expect(filterProjects(案件, '诉讼案件')).toHaveLength(2)
     expect(filterProjects(案件, '法律顾问').map((r) => r.project)).toEqual(['某某公司常年法律顾问'])
   })
@@ -647,7 +719,7 @@ describe('新建条目：草稿 → 请求体', () => {
   const base: ComposeDraft = {
     kind: 'todo',
     project: '甲案',
-    topLevelDir: '诉讼案件',
+    typeDir: '诉讼案件',
     title: '  整理开庭提纲  ',
     priority: null,
     note: '',
@@ -662,7 +734,7 @@ describe('新建条目：草稿 → 请求体', () => {
     expect(composeEditBody(base)).toEqual({
       op: 'todo.add',
       project: '甲案',
-      topLevelDir: '诉讼案件',
+      typeDir: '诉讼案件',
       input: { title: '整理开庭提纲' },
     })
   })
@@ -688,7 +760,7 @@ describe('新建条目：草稿 → 请求体', () => {
     expect(body).toEqual({
       op: 'schedule.add',
       project: '甲案',
-      topLevelDir: '诉讼案件',
+      typeDir: '诉讼案件',
       input: {
         title: '整理开庭提纲',
         startDate: '2026-09-12',
@@ -704,7 +776,7 @@ describe('新建条目：校验与 host 用的是同一份规则', () => {
   const draft = (over: Partial<ComposeDraft>): ComposeDraft => ({
     kind: 'todo',
     project: '甲案',
-    topLevelDir: '诉讼案件',
+    typeDir: '诉讼案件',
     title: '整理开庭提纲',
     priority: null,
     note: '',
@@ -768,7 +840,7 @@ describe('新建条目：校验与 host 用的是同一份规则', () => {
 describe('todoDetail：待办的明细内容', () => {
   const todo = (over: Partial<TodoRow> = {}): TodoRow => ({
     project: '甲诉乙',
-    topLevelDir: '诉讼案件',
+    typeDir: '诉讼案件',
     line: 7,
     done: false,
     title: '整理证据',
@@ -813,7 +885,7 @@ describe('openSourceMessage：打开原文的结果怎么说', () => {
   const result = (over: Partial<OpenSourceResult> = {}): OpenSourceResult => ({
     path: 'L:\\数据\\诉讼案件\\甲诉乙\\0. 协作\\1. 工作日志.md',
     project: '甲诉乙',
-    topLevelDir: '诉讼案件',
+    typeDir: '诉讼案件',
     kind: 'schedule',
     line: 42,
     exact: true,

@@ -18,10 +18,14 @@
 ## 1. 一次性准备
 
 ```powershell
-# npm 账号（首次）
-npm login
+# ① 先确认 registry 是官方源（是镜像就发布不了，见 2.5）
+npm config get registry          # 必须是 https://registry.npmjs.org/
 
-# 确认要发布的包名没被别人占（当前已知：可用）
+# ② 登录（首次；本机走浏览器授权，见 2.5）
+npm login
+npm whoami                       # 应打印 npm 用户名；报 ENEEDAUTH 说明还没登录
+
+# ③ 确认要发布的包名没被别人占
 npm view dsh-legal-schedule version 2>$null; if ($LASTEXITCODE -ne 0) { "名字可用" }
 ```
 
@@ -65,6 +69,42 @@ package.json
 ```
 
 `lib/index.js.map` 约 1.6 MB，**必须不在包里**（`files: ["lib/*.js", ...]` 已排除）。若它出现，说明 `files` 被改坏了。
+
+---
+
+## 2.5 发布时的两步验证（**实测路径，别再绕路**）
+
+npm 要求**发布必须有第二因子**。本机实测（npm 12 / Windows）的可行路径是**浏览器授权**，**不需要**任何算码工具：
+
+```powershell
+npm publish --access public
+# 终端会出现：
+#   Authenticate your account at:
+#   https://www.npmjs.com/auth/cli/<一串码>
+#   Press ENTER to open in the browser...
+```
+
+**直接按回车** → 浏览器打开授权页 → 登录并点授权 → 终端打印 `+ dsh-legal-schedule@0.1.0`。
+
+### 三条必须记住的
+
+1. **看到 `Enter OTP:` 或 `Press ENTER to open in the browser...`，第一动作是"按回车"**，不是去找/造一个验证码生成器。2026-09-13 我在这上面绕了远路：先查浏览器的一次性密码功能（Edge 153 没有），又写了个 Node TOTP 工具——而正确做法只是按一下回车。**先穷尽"按一下"的可能，再考虑"造工具"。**
+2. **`--otp=xxxxxx` 只在你有 TOTP 验证器时才有意义**，且必须是**当前有效的 6 位**（写成 7 位会被忽略、转而进入交互式索要）。走浏览器授权时**完全不需要**这个参数。
+3. **恢复码（recovery codes）必须保存到验证器设备之外的地方**。它是"浏览器授权失效 / 换机器"时**唯一**能找回账号的东西，每个只能用一次。查看与重新生成：`npmjs.com/settings/<用户名>/profile` → **Modify 2FA** → **Manage Recovery Codes**。npm 官方明确：**同时失去第二因子与恢复码，账号可能无法找回。**
+
+### 发布前必须确认的环境（一次性）
+
+```powershell
+npm config get registry      # 必须是 https://registry.npmjs.org/
+```
+
+**若显示 `registry.npmmirror.com`（淘宝镜像）就必须先改**——镜像是只读的，**不接受发布**，在那上面 `npm login` / `npm publish` 都不会成功。改法见仓库历史或：
+
+```powershell
+npm config delete registry --location=user   # 删掉用户层覆盖，回落到官方源
+```
+
+> 顺带实测：官方源在国内比镜像慢约 0.5 秒/次元数据请求，但**完全可用**（`lunar-javascript` 元数据 869ms vs 镜像 311ms；真装一个包 6 秒）。嫌慢时用**单条命令**临时指定镜像 `pnpm install --registry=https://registry.npmmirror.com`，**不要把镜像写回配置文件**。
 
 ---
 
@@ -122,6 +162,8 @@ DSH 平台的接口仍可能变动（`0.1.5-rc.2` 就取消了 `@deepseek-ai/dsh
 - [ ] `README.md` 的安装步骤与实际行为一致（尤其 `dsh.profile.bundles` 那一步）。
 - [ ] 若这次改了用户可见行为，`README.md` 的功能 / 限制小节同步更新。
 - [ ] `CHANGELOG`（若有）已更新；没有则至少让 git tag 说明版本。
+- [ ] **发布后**：`git push --follow-tags` 真的推上去了 —— npm 页面上的 `README` 与 `repository` 链接都指向 GitHub，**仓库没推 = 用户点过去看到旧文档**（2026-09-13 首次发布就是这个状态）。
+- [ ] **账号侧**：npm 的**恢复码已保存**到验证器设备之外的地方（见 2.5）。这是账号层面唯一不可再生的一步。
 
 ---
 

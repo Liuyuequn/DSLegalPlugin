@@ -33,11 +33,15 @@ interface Harness {
 }
 
 /** 假的 `ctx.settings`：用户层可写、可观察（真实实现见 `dsh-settings-file`）。 */
-function makeSettings(initial: { dataRoot?: string } = {}): {
+function makeSettings(
+  initial: { rootDir?: string; extraTypeDirs?: string[]; extraProjectDirs?: string[] } = {},
+): {
   readonly provider: unknown
-  readonly user: { dataRoot?: string }
+  readonly user: { rootDir?: string; extraTypeDirs?: string[]; extraProjectDirs?: string[] }
 } {
-  const user: { dataRoot?: string } = { ...initial }
+  const user: { rootDir?: string; extraTypeDirs?: string[]; extraProjectDirs?: string[] } = {
+    ...initial,
+  }
   const watchers: (() => void)[] = []
 
   const notify = (): void => {
@@ -45,7 +49,7 @@ function makeSettings(initial: { dataRoot?: string } = {}): {
   }
 
   const provider = {
-    register(_ns: string, _schema: unknown, options?: { base?: { dataRoot?: string } }) {
+    register(_ns: string, _schema: unknown, options?: { base?: typeof user }) {
       const scope = {
         get: () => ({ ...options?.base, ...user }),
         watch(callback: () => void) {
@@ -157,6 +161,8 @@ function makeHarness(settings?: unknown): Harness {
 let root = ''
 let harness: Harness
 let settings: ReturnType<typeof makeSettings>
+/** 测试用"根目录之外"的临时目录：**在监听器关闭之后**才删，避免 chokidar 的 EPERM。 */
+const extraDirs: string[] = []
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'dslegal-e2e-'))
@@ -167,7 +173,7 @@ beforeEach(async () => {
   settings = makeSettings()
   harness = makeHarness(settings.provider)
   apply(harness.ctx as Parameters<typeof apply>[0], {
-      dataRoot: root,
+      rootDir: root,
       debounceMs: 20,
       echoWindowMs: 20,
     },
@@ -179,6 +185,9 @@ afterEach(async () => {
   harness.dispose()
   await new Promise((done) => setTimeout(done, 200))
   await rm(root, { recursive: true, force: true }).catch(() => undefined)
+  for (const dir of extraDirs.splice(0)) {
+    await rm(dir, { recursive: true, force: true }).catch(() => undefined)
+  }
 })
 
 describe('插件装配', () => {
@@ -211,7 +220,7 @@ describe('HTTP 接口', () => {
     expect(body.projects).toHaveLength(1)
     expect(body.projects[0]).toMatchObject({
       project: '张三诉李四',
-      topLevelDir: '诉讼案件',
+      typeDir: '诉讼案件',
       category: '民事诉讼',
     })
   })
@@ -234,10 +243,10 @@ describe('HTTP 接口', () => {
     expect(status).toBe(404)
   })
 
-  it('GET /dslegal/settings 报告已设定的数据目录', async () => {
+  it('GET /dslegal/settings 报告已设定的目录', async () => {
     const { status, body } = await harness.request('GET', '/dslegal/settings')
     expect(status).toBe(200)
-    expect(body).toMatchObject({ configured: true, dataRoot: root, projectCount: 1 })
+    expect(body).toMatchObject({ configured: true, rootDir: root, projectCount: 1 })
   })
 
   /**
@@ -302,27 +311,27 @@ describe('HTTP 接口', () => {
     expect(back.body.priorityColors['重要且紧急']).toBe('#E53E3E')
   })
 
-  it('只为改颜色而调用时不必带 dataRoot', async () => {
+  it('只为改颜色而调用时不必带 rootDir', async () => {
     const saved = await harness.request('POST', '/dslegal/settings', {
       priorityColors: { 重要不紧急: '#abcdef' },
     })
     expect(saved.status).toBe(200)
-    // 数据目录不受影响。
-    expect(saved.body.dataRoot).toBe(root)
+    // 目录设置不受影响。
+    expect(saved.body.rootDir).toBe(root)
     expect(saved.body.priorityColors['重要不紧急']).toBe('#abcdef')
   })
 
   it('两个字段都不给时返回 400', async () => {
     const { status, body } = await harness.request('POST', '/dslegal/settings', {})
     expect(status).toBe(400)
-    expect(String(body.error)).toContain('dataRoot')
+    expect(String(body.error)).toContain('rootDir')
   })
 
-  it('GET /dslegal/overview 带 configured 与 dataRoot', async () => {
+  it('GET /dslegal/overview 带 configured 与 rootDir', async () => {
     const { status, body } = await harness.request('GET', '/dslegal/overview')
     expect(status).toBe(200)
     expect(body.configured).toBe(true)
-    expect(body.dataRoot).toBe(root)
+    expect(body.rootDir).toBe(root)
   })
 
   /**
@@ -352,7 +361,7 @@ describe('HTTP 接口', () => {
     expect(body.todos.map((row: { line: number }) => row.line)).toEqual([5, 6, 7])
     expect(body.todos[0]).toMatchObject({
       project: '张三诉李四',
-      topLevelDir: '诉讼案件',
+      typeDir: '诉讼案件',
       priority: '重要且紧急',
     })
     expect(body.projects[0]).toMatchObject({ todoPending: 2, todoDone: 1 })
@@ -370,7 +379,7 @@ describe('HTTP 接口', () => {
     expect(body.schedules.map((row: { title: string }) => row.title)).toEqual(['开庭', '二审开庭'])
     expect(body.schedules[0]).toMatchObject({
       project: '张三诉李四',
-      topLevelDir: '诉讼案件',
+      typeDir: '诉讼案件',
       category: '民事诉讼',
       startDate: '2026-09-01',
       startTime: '09:00',
@@ -412,18 +421,18 @@ describe('HTTP 接口', () => {
   })
 
   it('用户设置优先于组合层配置', async () => {
-    // 组合层指向空目录，用户设置指向真正的数据根目录。
+    // 组合层指向空目录，用户设置指向真正的根目录。
     const other = await mkdtemp(join(tmpdir(), 'dslegal-other-'))
-    const custom = makeSettings({ dataRoot: root })
+    const custom = makeSettings({ rootDir: root })
     const customHarness = makeHarness(custom.provider)
     apply(customHarness.ctx as Parameters<typeof apply>[0], {
-      dataRoot: other,
+      rootDir: other,
       debounceMs: 20,
       echoWindowMs: 20,
     })
     try {
       const { body } = await customHarness.request('GET', '/dslegal/settings')
-      expect(body.dataRoot).toBe(root)
+      expect(body.rootDir).toBe(root)
       expect(body.projectCount).toBe(1)
     } finally {
       customHarness.dispose()
@@ -505,7 +514,7 @@ describe('POST /dslegal/open（打开原始 markdown）', () => {
 
     const { status, body } = await harness.request('POST', '/dslegal/open', {
       project: '张三诉李四',
-      topLevelDir: '诉讼案件',
+      typeDir: '诉讼案件',
       kind: 'schedule',
       line: row.line,
     })
@@ -581,7 +590,7 @@ describe('POST /dslegal/open（打开原始 markdown）', () => {
   })
 })
 
-describe('未设定数据目录', () => {
+describe('未设定目录', () => {
   let bare: Harness
   let bareRoot = ''
 
@@ -592,7 +601,7 @@ describe('未设定数据目录', () => {
     await writeFile(join(dir, WORK_LOG_FILE), WORK_LOG, 'utf8')
 
     bare = makeHarness(makeSettings().provider)
-    // 组合层与用户层都没有 dataRoot。
+    // 组合层与用户层都没有 rootDir。
     apply(bare.ctx as Parameters<typeof apply>[0], { debounceMs: 20, echoWindowMs: 20 })
   })
 
@@ -605,7 +614,7 @@ describe('未设定数据目录', () => {
   it('GET /dslegal/settings 返回 configured:false', async () => {
     const { status, body } = await bare.request('GET', '/dslegal/settings')
     expect(status).toBe(200)
-    expect(body).toMatchObject({ configured: false, dataRoot: null, projectCount: 0 })
+    expect(body).toMatchObject({ configured: false, rootDir: null, projectCount: 0 })
   })
 
   it('GET /dslegal/overview 不报错，返回空集 + configured:false', async () => {
@@ -617,16 +626,16 @@ describe('未设定数据目录', () => {
     expect(body.todos).toEqual([])
   })
 
-  it('其余接口提示先设定数据目录', async () => {
+  it('其余接口提示先设定目录', async () => {
     const { status, body } = await bare.request('GET', '/dslegal/projects')
     expect(status).toBe(400)
-    expect(body.error).toContain('尚未设定数据目录')
+    expect(body.error).toContain('尚未设定目录')
   })
 
   it('POST /dslegal/settings 保存后立即生效并返回项目数', async () => {
-    const saved = await bare.request('POST', '/dslegal/settings', { dataRoot: bareRoot })
+    const saved = await bare.request('POST', '/dslegal/settings', { rootDir: bareRoot })
     expect(saved.status).toBe(200)
-    expect(saved.body).toMatchObject({ configured: true, dataRoot: bareRoot, projectCount: 1 })
+    expect(saved.body).toMatchObject({ configured: true, rootDir: bareRoot, projectCount: 1 })
 
     const overview = await bare.request('GET', '/dslegal/overview')
     expect(overview.body.configured).toBe(true)
@@ -636,7 +645,7 @@ describe('未设定数据目录', () => {
 
   it('保存不存在的目录返回 400 且保持未设定', async () => {
     const { status, body } = await bare.request('POST', '/dslegal/settings', {
-      dataRoot: join(bareRoot, '不存在'),
+      rootDir: join(bareRoot, '不存在'),
     })
     expect(status).toBe(400)
     expect(body.error).toContain('目录不存在')
@@ -644,10 +653,10 @@ describe('未设定数据目录', () => {
     expect(after.body.configured).toBe(false)
   })
 
-  it('保存空串返回 400', async () => {
-    const { status, body } = await bare.request('POST', '/dslegal/settings', { dataRoot: '   ' })
-    expect(status).toBe(400)
-    expect(body.error).toContain('请填写数据根目录的路径')
+  it('保存空串 = 清空根目录（根目录不再必填）', async () => {
+    const { status, body } = await bare.request('POST', '/dslegal/settings', { rootDir: '   ' })
+    expect(status).toBe(200)
+    expect(body).toMatchObject({ configured: false, rootDir: null, projectCount: 0 })
   })
 })
 
@@ -671,5 +680,111 @@ describe('工具与 HTTP 走同一套领域操作', () => {
 
     const text = await readFile(join(root, '诉讼案件', '张三诉李四', COLLAB_DIR, WORK_LOG_FILE), 'utf8')
     expect(text).toContain('- [x] [起草起诉状]')
+  })
+})
+
+/**
+ * 三级目录**各自独立**（用户 2026-09-15 要求）：
+ * 根目录下的子文件夹默认是类型目录；类型目录与项目目录都可以另行指定，且**可以在根目录
+ * 之外**。这一组用例守的是"独立"两个字：只设其中任意一级都能工作，改一级不会把另一级抹掉。
+ */
+describe('三级目录各自独立', () => {
+  /** 造一个"根目录之外"的类型目录（含一个项目与工作日志），返回类型目录绝对路径。 */
+  async function makeOutside(
+    typeDirName: string,
+    project: string,
+    title = '# 工作日志_民事',
+  ): Promise<string> {
+    const base = await mkdtemp(join(tmpdir(), 'dslegal-out-'))
+    extraDirs.push(base)
+    const dir = join(base, typeDirName, project, COLLAB_DIR)
+    await mkdir(dir, { recursive: true })
+    await writeFile(
+      join(dir, WORK_LOG_FILE),
+      `${title}\n\n## 1. 待办事项\n\n- [ ] [外部待办]，[重要不紧急]\n\n`,
+      'utf8',
+    )
+    return join(base, typeDirName)
+  }
+
+  it('另行指定的类型目录：在根目录之外也能扫到，typeDir 取该文件夹名', async () => {
+    const typeDirPath = await makeOutside('自家分类', '外部案件')
+    const saved = await harness.request('POST', '/dslegal/settings', {
+      extraTypeDirs: [typeDirPath],
+    })
+    expect(saved.status).toBe(200)
+    expect(saved.body.extraTypeDirs).toEqual([typeDirPath])
+
+    const { body } = await harness.request('GET', '/dslegal/projects')
+    const row = (body.projects as { project: string; typeDir: string }[]).find(
+      (item) => item.project === '外部案件',
+    )
+    expect(row?.typeDir).toBe('自家分类')
+  })
+
+  it('另行指定的项目目录：直接指定项目文件夹，typeDir 取父文件夹名', async () => {
+    const typeDirPath = await makeOutside('散装', '单列案件')
+    const saved = await harness.request('POST', '/dslegal/settings', {
+      extraProjectDirs: [join(typeDirPath, '单列案件')],
+    })
+    expect(saved.status).toBe(200)
+
+    const { body } = await harness.request('GET', '/dslegal/projects')
+    const row = (body.projects as { project: string; typeDir: string }[]).find(
+      (item) => item.project === '单列案件',
+    )
+    expect(row?.typeDir).toBe('散装')
+  })
+
+  it('部分保存：改根目录不会抹掉另行指定的目录', async () => {
+    const typeDirPath = await makeOutside('自家分类', '外部案件')
+    await harness.request('POST', '/dslegal/settings', { extraTypeDirs: [typeDirPath] })
+
+    const again = await harness.request('POST', '/dslegal/settings', { rootDir: root })
+    expect(again.status).toBe(200)
+    expect(again.body.extraTypeDirs).toEqual([typeDirPath])
+  })
+
+  it('清空根目录后，只要另有指定的目录就仍是"已配置"', async () => {
+    const typeDirPath = await makeOutside('自家分类', '外部案件')
+    await harness.request('POST', '/dslegal/settings', { extraTypeDirs: [typeDirPath] })
+
+    const cleared = await harness.request('POST', '/dslegal/settings', { rootDir: '' })
+    expect(cleared.status).toBe(200)
+    expect(cleared.body.configured).toBe(true)
+    expect(cleared.body.rootDir).toBeNull()
+
+    const { body } = await harness.request('GET', '/dslegal/overview')
+    expect(body.configured).toBe(true)
+    expect((body.projects as { project: string }[]).map((item) => item.project)).toEqual([
+      '外部案件',
+    ])
+  })
+
+  it('目录列表必须是字符串数组（形状不对就报错，不静默清空）', async () => {
+    const { status, body } = await harness.request('POST', '/dslegal/settings', {
+      extraTypeDirs: 'D:/法律工作',
+    })
+    expect(status).toBe(400)
+    expect(String(body.error)).toContain('extraTypeDirs 必须是字符串数组')
+  })
+
+  it('另行指定的目录不存在时返回 400 且不落盘', async () => {
+    const missing = join(tmpdir(), 'dslegal-不存在-的目录')
+    const { status, body } = await harness.request('POST', '/dslegal/settings', {
+      extraProjectDirs: [missing],
+    })
+    expect(status).toBe(400)
+    expect(String(body.error)).toContain('项目目录不存在')
+
+    const reread = await harness.request('GET', '/dslegal/settings')
+    expect(reread.body.extraProjectDirs).toEqual([])
+  })
+
+  it('三级目录随总览一起下发（设置表单的草稿要有初值）', async () => {
+    const { body } = await harness.request('GET', '/dslegal/overview')
+    expect(body.rootDir).toBe(root)
+    expect(body.extraTypeDirs).toEqual([])
+    expect(body.extraProjectDirs).toEqual([])
   })
 })

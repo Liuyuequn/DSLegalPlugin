@@ -56,6 +56,8 @@ import {
   dateLabel,
   dayHeading,
   dayLabel,
+  directoryListOf,
+  directorySaveDisabled,
   filterProjects,
   fitRows,
   fullDateLabel,
@@ -900,10 +902,10 @@ export function TodoPopover(props: {
 // 新建条目：悬浮窗表单
 // ---------------------------------------------------------------------------
 
-/** 新建窗能选的项目（重名项目靠 `topLevelDir` 消歧）。 */
+/** 新建窗能选的项目（重名项目靠 `typeDir` 消歧）。 */
 export interface ComposeProjectOption {
   readonly project: string
-  readonly topLevelDir: string
+  readonly typeDir: string
 }
 
 /**
@@ -985,7 +987,7 @@ export function CreatePopover(props: {
   const highlight = matches.length === 0 ? -1 : Math.min(cursor, matches.length - 1)
 
   const pick = (row: ComposeProjectOption): void => {
-    props.onChange({ project: row.project, topLevelDir: row.topLevelDir })
+    props.onChange({ project: row.project, typeDir: row.typeDir })
     setPickerOpen(false)
     setKeyword('')
     setCursor(0)
@@ -1082,7 +1084,7 @@ export function CreatePopover(props: {
               }}
             >
               <span style={UI.composeProjectName}>{draft.project}</span>
-              <span style={UI.composeProjectDir}>{draft.topLevelDir}</span>
+              <span style={UI.composeProjectDir}>{draft.typeDir}</span>
               <span style={UI.composeCaret(pickerOpen)}>▾</span>
             </button>
 
@@ -1110,11 +1112,11 @@ export function CreatePopover(props: {
                   ) : (
                     matches.map((row, index) => {
                       const current =
-                        row.project === draft.project && row.topLevelDir === draft.topLevelDir
-                      const key = `cpo-${row.topLevelDir}/${row.project}`
+                        row.project === draft.project && row.typeDir === draft.typeDir
+                      const key = `cpo-${row.typeDir}/${row.project}`
                       return (
                         <button
-                          key={`${row.topLevelDir}/${row.project}`}
+                          key={`${row.typeDir}/${row.project}`}
                           type="button"
                           data-fl="compose-project-option"
                           data-fl-selected={current ? 'y' : 'n'}
@@ -1122,13 +1124,13 @@ export function CreatePopover(props: {
                           role="option"
                           aria-selected={current}
                           style={UI.composeProjectOption(current, props.hover === key || index === highlight)}
-                          title={`${row.project}（${row.topLevelDir}）`}
+                          title={`${row.project}（${row.typeDir}）`}
                           {...hoverProps(key, props)}
                           onClick={() => pick(row)}
                         >
                           <span style={UI.composeProjectMark(current)}>✓</span>
                           <span style={UI.composeProjectName}>{row.project}</span>
-                          <span style={UI.composeProjectDir}>{row.topLevelDir}</span>
+                          <span style={UI.composeProjectDir}>{row.typeDir}</span>
                         </button>
                       )
                     })
@@ -1459,8 +1461,8 @@ function QuadrantArea(props: ViewProps & { readonly bucket: QuadrantBucket<TodoR
 // ---------------------------------------------------------------------------
 
 export interface ProjectLensProps extends ViewProps {
-  readonly scope: { readonly project: string; readonly topLevelDir: string } | null
-  readonly setScope: (scope: { readonly project: string; readonly topLevelDir: string } | null) => void
+  readonly scope: { readonly project: string; readonly typeDir: string } | null
+  readonly setScope: (scope: { readonly project: string; readonly typeDir: string } | null) => void
   readonly agenda: Agenda | null
 }
 
@@ -1486,11 +1488,12 @@ function ProjectList(props: ProjectLensProps): JSX.Element {
       <div style={{ ...UI.listColumn(), padding: S.lg, gap: S.sm }}>
         {projects.length === 0 ? (
           <div style={UI.empty}>
-            没有找到已就绪的项目。已就绪 = 存在「&lt;顶级目录&gt;/&lt;项目&gt;/0. 协作/1. 工作日志.md」。
+            没有找到已就绪的项目。已就绪 = 存在「&lt;根目录&gt;/&lt;类型目录&gt;/&lt;项目目录&gt;/0.
+            协作/1. 工作日志.md」。
           </div>
         ) : (
           projects.map((row) => {
-            const key = `p-${row.topLevelDir}/${row.project}`
+            const key = `p-${row.typeDir}/${row.project}`
             const total = row.todoPending + row.todoDone
             return (
               <button
@@ -1500,7 +1503,7 @@ function ProjectList(props: ProjectLensProps): JSX.Element {
                 style={UI.caseRow(props.hover === key, row.issueCount > 0)}
                 {...hoverProps(key, props)}
                 onClick={() =>
-                  props.setScope({ project: row.project, topLevelDir: row.topLevelDir })
+                  props.setScope({ project: row.project, typeDir: row.typeDir })
                 }
               >
                 <span style={UI.itemBody}>
@@ -1510,11 +1513,11 @@ function ProjectList(props: ProjectLensProps): JSX.Element {
                     </span>
                     <CategoryTag row={row} />
                     {/*
-                      顶级目录与 H1 类别经常同名（「法律顾问」目录里放「# 工作日志_法律顾问」），
+                      类型目录与 H1 类别经常同名（「法律顾问」目录里放「# 工作日志_法律顾问」），
                       并排显示就是同一个词写两遍。只在两者不同时才补第二个标签。
                     */}
-                    {row.topLevelDir === row.category ? null : (
-                      <span style={UI.tag(T.border2)}>{row.topLevelDir}</span>
+                    {row.typeDir === row.category ? null : (
+                      <span style={UI.tag(T.border2)}>{row.typeDir}</span>
                     )}
                   </span>
                   <span style={{ ...UI.itemMeta, display: 'block' }}>
@@ -1611,18 +1614,18 @@ function ScheduleLine(props: ViewProps & { readonly row: ScheduleRow }): JSX.Ele
 
 /** 单项目详情：该项目的**全部**待办事项与日程安排。 */
 function ProjectDetail(
-  props: ProjectLensProps & { readonly scope: { readonly project: string; readonly topLevelDir: string } },
+  props: ProjectLensProps & { readonly scope: { readonly project: string; readonly typeDir: string } },
 ): JSX.Element {
   const { scope } = props
   const row = props.overview.projects.find(
-    (item) => item.project === scope.project && item.topLevelDir === scope.topLevelDir,
+    (item) => item.project === scope.project && item.typeDir === scope.typeDir,
   )
   const todos = props.overview.todos.filter(
-    (item) => item.project === scope.project && item.topLevelDir === scope.topLevelDir,
+    (item) => item.project === scope.project && item.typeDir === scope.typeDir,
   )
   const schedules = sortSchedules(
     props.overview.schedules.filter(
-      (item) => item.project === scope.project && item.topLevelDir === scope.topLevelDir,
+      (item) => item.project === scope.project && item.typeDir === scope.typeDir,
     ),
   )
   const buckets = quadrantBuckets(todos)
@@ -1642,8 +1645,8 @@ function ProjectDetail(
         </button>
         <span style={UI.sectionTitle}>{scope.project}</span>
         {row === undefined ? null : <CategoryTag row={row} />}
-        {row !== undefined && row.topLevelDir === row.category ? null : (
-          <span style={UI.tag(T.border2)}>{scope.topLevelDir}</span>
+        {row !== undefined && row.typeDir === row.category ? null : (
+          <span style={UI.tag(T.border2)}>{scope.typeDir}</span>
         )}
         <span style={UI.sectionHint}>
           待办 {todos.length} 条（未完成 {todos.filter((item) => !item.done).length}）· 日程{' '}
@@ -1669,7 +1672,7 @@ function ProjectDetail(
             title={`点击新建一条「${scope.project}」的待办`}
             {...hoverProps('dc-todo', props)}
             onClick={blankClick(
-              { kind: 'todo', project: scope.project, topLevelDir: scope.topLevelDir },
+              { kind: 'todo', project: scope.project, typeDir: scope.typeDir },
               props.onCompose,
             )}
           >
@@ -1684,7 +1687,7 @@ function ProjectDetail(
             style={{ padding: `${S.md}px ${S.lg}px ${S.lg}px`, cursor: 'pointer' }}
             title={`点击空白处新建一条「${scope.project}」的待办`}
             onClick={blankClick(
-              { kind: 'todo', project: scope.project, topLevelDir: scope.topLevelDir },
+              { kind: 'todo', project: scope.project, typeDir: scope.typeDir },
               props.onCompose,
             )}
           >
@@ -1701,7 +1704,7 @@ function ProjectDetail(
                       {
                         kind: 'todo',
                         project: scope.project,
-                        topLevelDir: scope.topLevelDir,
+                        typeDir: scope.typeDir,
                         priority: bucket.quadrant,
                       },
                       props.onCompose,
@@ -1788,7 +1791,7 @@ function ProjectDetail(
             title={`点击新建一条「${scope.project}」的日程（默认今天）`}
             {...hoverProps('dc-schedule', props)}
             onClick={blankClick(
-              { kind: 'schedule', project: scope.project, topLevelDir: scope.topLevelDir },
+              { kind: 'schedule', project: scope.project, typeDir: scope.typeDir },
               props.onCompose,
             )}
           >
@@ -1801,7 +1804,7 @@ function ProjectDetail(
             style={{ padding: `${S.sm}px ${S.md}px ${S.lg}px`, cursor: 'pointer' }}
             title={`点击空白处新建一条「${scope.project}」的日程`}
             onClick={blankClick(
-              { kind: 'schedule', project: scope.project, topLevelDir: scope.topLevelDir },
+              { kind: 'schedule', project: scope.project, typeDir: scope.typeDir },
               props.onCompose,
             )}
           >
@@ -1873,11 +1876,12 @@ const HELP_SECTIONS: readonly {
     title: '数据放在哪：文件就是数据库',
     hint: '最该先知道的一条',
     lines: [
-      '法程**不建数据库**，你的数据就是磁盘上的工作日志 markdown 文件，一个项目一份：',
+      '法程**不建数据库**，你的数据就是磁盘上的工作日志 markdown 文件，一个项目一份。它按这条路径认项目——三个目录名都可以自己设，最里面两个名字固定：',
     ],
-    code: '<数据根目录>/<顶级目录>/<项目>/0. 协作/1. 工作日志.md',
+    code: '<根目录>/<类型目录>/<项目目录>/0. 协作/1. 工作日志.md',
     more: [
-      '数据根目录在顶部「插件设置」里填，就是包含各案件文件夹的那一层。**「0. 协作」与「1. 工作日志.md」这两个名字是固定的**——插件按这条路径找项目，所以放在别处（例如「0. 工作」「.0. 数据」，或叫「0. 工作日志.md」）的工作日志**认不出来，插件也不会去猜**：猜错就会把条目写进你没想到的文件里。',
+      '这条路径靠三个名字定位，**三级目录都可以在顶部「插件设置」里自己设**：第一级的「根目录」是放各类型目录的那一层；第二级的「类型目录」默认就是根目录下的子文件夹，也可以另行指定成根目录之外的目录（挂载点、另一个盘都行）；第三级的「项目目录」（案例文件夹）默认是类型目录下的子文件夹，同样可以另行指定，直接把某个案件文件夹指过来也是合法的。',
+      '**但最里面那两个名字是固定的：「0. 协作」与「1. 工作日志.md」**——插件按这条路径找项目，所以把它换成别的（例如「0. 工作」「.0. 数据」，或把文件名写成「0. 工作日志.md」）就**认不出来，插件也不会去猜**：猜错就会把条目写进你没想到的文件里。',
       '文件里只有两个二级章节：**「## 1. 待办事项」与「## 2. 日程安排」**，名字同样是固定的。章节缺失或条目格式异常时，插件**原样保留、只如实提示**，不替你重建、也不静默丢弃。',
       'H1 标题即服务类别，例如「# 工作日志_民事」；缺了或认不出来只是类别显示"未知"，功能不受影响。',
       '待办条目：- [ ] [标题]，[优先级]，[备注]',
@@ -1964,10 +1968,10 @@ const HELP_SECTIONS: readonly {
   },
   {
     title: '插件设置',
-    hint: '数据目录与四象限颜色',
+    hint: '三级目录与四象限颜色',
     lines: [
-      '顶部「插件设置」里有两块，**各自独立保存**（改颜色不必先设数据目录，反之亦然）：',
-      '数据目录：填入包含各项目文件夹的那一层（目录需要已存在）。保存后写入 DSH 的用户设置并立即生效。',
+      '顶部「插件设置」里有两块，**各自独立保存**（改颜色不必先设目录，反之亦然）：',
+      '目录设置：「根目录」是包含各类型目录的那一层（例如 L:\\法律工作）；「另行指定的类型目录」与「另行指定的项目目录」各是一份多行清单，一行一个绝对路径，用来把根目录之外的目录也纳进来——每一项都可以独立设定，也可以只设其中一项。目录需要已存在（插件不创建目录），保存后写入 DSH 的用户设置并立即生效。',
       '四象限颜色：四个优先级各一个取色器；改完点「保存颜色」。写坏的色值会被逐键退回默认色，并在下方说明原因。',
     ],
   },
@@ -2109,21 +2113,37 @@ export function HelpView(props: {
 }
 
 // ---------------------------------------------------------------------------
-// 数据目录表单
+// 目录设置表单（根目录 / 另行指定的类型目录 / 另行指定的项目目录）
 // ---------------------------------------------------------------------------
 
-/** 未设定数据目录时的界面：**只给一个路径输入框**（数据来源未知时其余功能无意义）。 */
+/**
+ * 目录设置：**三级目录各自独立设定**，一个都没设时自动进入，之后由「插件设置」进入。
+ *
+ * 三级是「根目录 → 类型目录 → 项目目录」的包含关系，但**每一级都可以另行指定**：
+ * 根目录是默认的那一层，另设的两份清单则允许目录树散落在根目录之外（挂载点、别的盘、
+ * 直接把某个案件文件夹指过来都行）。表单因此是三块而不是一块输入框。
+ *
+ * 多行文本 ↔ 数组的转换在 `view.ts` 的 `directoryListOf`（纯函数，有单测）——表单里
+ * 只留"受控值 + 回调"，不加任何解析逻辑。
+ */
 export function SetupForm(props: {
+  /** 根目录草稿（单行；空串 = 还没填 / 想清空）。 */
   readonly value: string
+  readonly extraTypeDirs: string
+  readonly extraProjectDirs: string
   readonly error: string | null
   readonly saving: boolean
+  /** 保存前三级目录一个都没设定过：此时根目录不能空。 */
+  readonly configUnset: boolean
   readonly canCancel: boolean
   readonly hover: string | null
   readonly setHover: (key: string | null) => void
   readonly onChange: (value: string) => void
+  readonly onChangeTypeDirs: (value: string) => void
+  readonly onChangeProjectDirs: (value: string) => void
   readonly onSave: () => void
   readonly onCancel: () => void
-  /** 四象限颜色草稿（`null` = 还没取到，此时只显示数据目录那一块）。 */
+  /** 四象限颜色草稿（`null` = 还没取到，此时只显示目录那一块）。 */
   readonly colors: Record<Priority, string> | null
   /** 出厂默认色，供「恢复默认」用。 */
   readonly defaultColors: Record<Priority, string> | null
@@ -2135,23 +2155,31 @@ export function SetupForm(props: {
   readonly onResetColors: () => void
   readonly onSaveColors: () => void
 }): JSX.Element {
-  const disabled = props.saving || props.value.trim().length === 0
+  const disabled = directorySaveDisabled({
+    saving: props.saving,
+    wasConfigured: !props.configUnset,
+    rootDir: props.value,
+    extraTypeDirs: directoryListOf(props.extraTypeDirs),
+    extraProjectDirs: directoryListOf(props.extraProjectDirs),
+  })
   return (
     <div style={{ padding: S.xl, display: 'flex', flexDirection: 'column', gap: S.xxl, maxWidth: 640 }}>
       <section style={{ display: 'flex', flexDirection: 'column', gap: S.md }}>
         <div style={UI.sectionHint}>
-          请填入数据根目录（包含各项目文件夹的那一层）。插件按
-          「&lt;数据根目录&gt;/&lt;顶级目录&gt;/&lt;项目&gt;/0. 协作/1. 工作日志.md」读取工作日志；
-          目录需要已存在，插件不会创建它。完整的数据约定见顶部「使用说明」。
+          插件按「&lt;根目录&gt;/&lt;类型目录&gt;/&lt;项目&gt;/0. 协作/1. 工作日志.md」
+          这一条路径认项目；三级目录（根目录 / 类型目录 / 项目目录）可以各自独立设定，
+          下面两块「另行指定」就是给根目录之外的目录用的。目录需要已存在，插件不会创建它。
+          完整的数据约定见顶部「使用说明」。
         </div>
         <label style={{ display: 'flex', flexDirection: 'column', gap: S.sm }}>
-          <span style={UI.sectionTitle}>数据根目录</span>
+          <span style={UI.sectionTitle}>根目录</span>
+          <span style={UI.sectionHint}>里面放各类型目录（例如 L:\法律工作）。</span>
           <input
-            style={UI.input(props.hover === 'data-root-input')}
+            style={UI.input(props.hover === 'config-rootDir-input')}
             placeholder="例如 L:\\法律工作"
             value={props.value}
-            aria-label="数据根目录"
-            onMouseEnter={() => props.setHover('data-root-input')}
+            aria-label="根目录"
+            onMouseEnter={() => props.setHover('config-rootDir-input')}
             onMouseLeave={() => props.setHover(null)}
             onChange={(event) => props.onChange(event.target.value)}
             onKeyDown={(event) => {
@@ -2159,6 +2187,44 @@ export function SetupForm(props: {
             }}
           />
         </label>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: S.sm }}>
+          <span style={UI.sectionTitle}>另行指定的类型目录</span>
+          <span style={UI.sectionHint}>
+            一行一个绝对路径；可以填根目录之外的目录。留空表示不另设。
+          </span>
+          <textarea
+            rows={3}
+            style={UI.input(props.hover === 'config-extraTypeDirs-input')}
+            placeholder={'例如 L:\\法律工作\\诉讼案件'}
+            value={props.extraTypeDirs}
+            aria-label="另行指定的类型目录（一行一个）"
+            spellCheck={false}
+            onMouseEnter={() => props.setHover('config-extraTypeDirs-input')}
+            onMouseLeave={() => props.setHover(null)}
+            onChange={(event) => props.onChangeTypeDirs(event.target.value)}
+          />
+        </label>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: S.sm }}>
+          <span style={UI.sectionTitle}>另行指定的项目目录</span>
+          <span style={UI.sectionHint}>
+            一行一个绝对路径；可以直接指定某个项目文件夹，也可以在根目录之外。留空表示不另设。
+          </span>
+          <textarea
+            rows={3}
+            style={UI.input(props.hover === 'config-extraProjectDirs-input')}
+            placeholder={'例如 L:\\别的盘\\张三诉李四民间借贷'}
+            value={props.extraProjectDirs}
+            aria-label="另行指定的项目目录（一行一个）"
+            spellCheck={false}
+            onMouseEnter={() => props.setHover('config-extraProjectDirs-input')}
+            onMouseLeave={() => props.setHover(null)}
+            onChange={(event) => props.onChangeProjectDirs(event.target.value)}
+          />
+        </label>
+        <div style={UI.sectionHint}>
+          目录清单的写法：一行一个、首尾空白忽略、空行忽略、重复的只留第一条（Windows
+          上大小写不敏感）。
+        </div>
         {props.error === null ? null : (
           <div style={{ ...FONT.secondary, color: T.error }} role="alert">
             {props.error}

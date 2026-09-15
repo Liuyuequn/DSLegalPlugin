@@ -18,8 +18,8 @@ export const SECTION_TODO = '1. 待办事项'
 /** 日程安排章节标题（H2 文本，精确匹配，前后空白容错）。 */
 export const SECTION_SCHEDULE = '2. 日程安排'
 
-/** 顶级目录默认名称 → 服务类别。名称可配置，此处为默认值。 */
-export const DEFAULT_TOP_LEVEL_DIRS: Readonly<Record<string, readonly ServiceCategory[]>> = {
+/** 类型目录默认名称 → 服务类别。名称可配置，此处为默认值。 */
+export const DEFAULT_TYPE_DIRS: Readonly<Record<string, readonly ServiceCategory[]>> = {
   诉讼案件: ['民事诉讼', '刑事诉讼', '行政诉讼'],
   法律顾问: ['法律顾问'],
   知产代理: ['专利代理', '商标代理'],

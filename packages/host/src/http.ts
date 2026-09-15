@@ -25,6 +25,7 @@ import {
 
 import {
   commit,
+  isConfigured,
   locate,
   readAgenda,
   requireProject,
@@ -60,7 +61,7 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
 function projectJson(location: ProjectLocation): Record<string, unknown> {
   const json: Record<string, unknown> = {
     project: location.project,
-    topLevelDir: location.topLevelDir,
+    typeDir: location.typeDir,
     workLogPath: location.workLogPath,
     allowedCategories: [...location.allowedCategories],
   }
@@ -91,6 +92,21 @@ function readTarget(value: unknown): Target {
 function text(input: Record<string, unknown>, key: string): string | undefined {
   const value = input[key]
   return typeof value === 'string' ? value : undefined
+}
+
+/**
+ * 读取"字符串数组"字段（另行指定的类型目录 / 项目目录）。
+ *
+ * 形状不对就报错，**绝不"尽力而为"**：把字符串或 null 当数组吞下去，会把"界面传错了"
+ * 静默变成"把用户的目录清单清空了"——那是丢数据，不是容错。
+ */
+function textList(input: Record<string, unknown>, key: string): string[] | undefined {
+  const value = input[key]
+  if (value === undefined) return undefined
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
+    throw new Error(`${key} 必须是字符串数组。`)
+  }
+  return value as string[]
 }
 
 function optionalText(input: Record<string, unknown>, key: string): string | null | undefined {
@@ -124,7 +140,7 @@ async function applyEdit(
   if (op === undefined) throw new Error('缺少 op。')
   if (project === undefined || project.length === 0) throw new Error('缺少 project。')
 
-  const location = await requireProject(deps, project, text(body, 'topLevelDir'))
+  const location = await requireProject(deps, project, text(body, 'typeDir'))
   const snapshot = await deps.readWorkLog(location.workLogPath)
   const input = (body.input ?? {}) as Record<string, unknown>
   const path = location.workLogPath
@@ -241,26 +257,37 @@ function localKey(date: Date): string {
 }
 
 /**
- * 插件设置（数据目录 + 四象限颜色）。
+ * 插件设置（三级目录 + 四象限颜色）。
  *
- * 未设定数据目录时返回 `configured: false`，界面据此改显路径输入框；**颜色与数据目录
- * 无关，任何情况下都下发**——否则界面连"配色"这一块都画不出来。
+ * 三级目录（根目录 / 类型目录 / 项目目录）**一个都没设定**时返回 `configured: false`，
+ * 界面据此改显目录设置表单；**颜色与目录无关，任何情况下都下发**——否则界面连"配色"
+ * 这一块都画不出来。
  */
 async function buildSettings(deps: LegalDeps): Promise<Record<string, unknown>> {
   const { colors, issues } = deps.getPriorityColors()
-  const dataRoot = deps.getDataRoot()
+  const paths = deps.getPaths()
   const common = {
     priorityColors: colors,
     defaultPriorityColors: PRIORITY_COLORS,
     colorIssues: issues,
   }
-  if (dataRoot === null) {
-    return { configured: false, dataRoot: null, projectCount: 0, incompleteCount: 0, ...common }
+  if (!isConfigured(paths)) {
+    return {
+      configured: false,
+      rootDir: null,
+      extraTypeDirs: [],
+      extraProjectDirs: [],
+      projectCount: 0,
+      incompleteCount: 0,
+      ...common,
+    }
   }
   const { projects, incomplete } = await deps.scan(true)
   return {
     configured: true,
-    dataRoot,
+    rootDir: paths.rootDir,
+    extraTypeDirs: [...paths.extraTypeDirs],
+    extraProjectDirs: [...paths.extraProjectDirs],
     projectCount: projects.length,
     incompleteCount: incomplete.length,
     ...common,
@@ -283,7 +310,7 @@ async function buildSettings(deps: LegalDeps): Promise<Record<string, unknown>> 
  * - 创建时间：数据契约里没有时间戳，"最近创建"以**文件中的行号**近似（条目追加在
  *   章节末尾，行号越大越晚写入）。host 不排序待办，只按 `项目 → 行号` 稳定下发。
  *
- * 尚未设定数据目录时返回空集 + `configured: false`，界面改显「数据目录」表单。
+ * 三级目录一个都没设定时返回空集 + `configured: false`，界面改显「目录设置」表单。
  *
  * 扫描一律 `force`：案件目录是用户在工作日志之外新建/改名/删除的，**磁盘才是真相**，
  * 走缓存会让新建的案件在界面与工具里"不存在"，直到碰巧有别的文件变更或重启 DSH。
@@ -291,13 +318,20 @@ async function buildSettings(deps: LegalDeps): Promise<Record<string, unknown>> 
 async function buildOverview(deps: LegalDeps, now: Date): Promise<Record<string, unknown>> {
   const today = localKey(now)
   const { colors, issues } = deps.getPriorityColors()
-  // 颜色与数据目录无关，未设定目录时也要下发，否则界面连空态都画不出正确的配色。
+  // 颜色与目录无关，未设定目录时也要下发，否则界面连空态都画不出正确的配色。
   const palette = { priorityColors: colors, colorIssues: issues }
-  const dataRoot = deps.getDataRoot()
-  if (dataRoot === null) {
+  const paths = deps.getPaths()
+  // 三级目录随总览一起下发：设置表单的草稿要有初始值，否则"页面已刷新、host 还是旧版"
+  // 的窗口期里，表单会以空白覆盖掉用户已经配好的目录。
+  const pathFields = {
+    rootDir: paths.rootDir,
+    extraTypeDirs: [...paths.extraTypeDirs],
+    extraProjectDirs: [...paths.extraProjectDirs],
+  }
+  if (!isConfigured(paths)) {
     return {
       configured: false,
-      dataRoot: null,
+      ...pathFields,
       today,
       projects: [],
       todos: [],
@@ -324,7 +358,7 @@ async function buildOverview(deps: LegalDeps, now: Date): Promise<Record<string,
     for (const item of allTodos) {
       todos.push({
         project: location.project,
-        topLevelDir: location.topLevelDir,
+        typeDir: location.typeDir,
         ...todoJson(item),
       })
     }
@@ -343,7 +377,7 @@ async function buildOverview(deps: LegalDeps, now: Date): Promise<Record<string,
         start: interval.start.getTime(),
         row: {
           project: location.project,
-          topLevelDir: location.topLevelDir,
+          typeDir: location.typeDir,
           category: location.category,
           ongoing: live,
           ...scheduleJson(item),
@@ -354,7 +388,7 @@ async function buildOverview(deps: LegalDeps, now: Date): Promise<Record<string,
     const doneCount = allTodos.reduce((sum, item) => sum + (item.done ? 1 : 0), 0)
     rows.push({
       project: location.project,
-      topLevelDir: location.topLevelDir,
+      typeDir: location.typeDir,
       ...(location.category === null ? {} : { category: location.category }),
       ...(location.title === null ? {} : { title: location.title }),
       ...(location.categoryIssue === null ? {} : { categoryIssue: location.categoryIssue }),
@@ -381,7 +415,7 @@ async function buildOverview(deps: LegalDeps, now: Date): Promise<Record<string,
 
   return {
     configured: true,
-    dataRoot,
+    ...pathFields,
     today,
     projects: rows,
     todos,
@@ -413,7 +447,7 @@ async function openWorkLog(
     throw new Error('line 必须是正整数。')
   }
 
-  const location = await requireProject(deps, project, text(body, 'topLevelDir'))
+  const location = await requireProject(deps, project, text(body, 'typeDir'))
   const snapshot = await deps.readWorkLog(location.workLogPath)
   const kind = text(body, 'kind') === 'todo' ? 'todo' : 'schedule'
   const section = kind === 'todo' ? snapshot.result.todo : snapshot.result.schedule
@@ -423,7 +457,7 @@ async function openWorkLog(
   return {
     path: location.workLogPath,
     project: location.project,
-    topLevelDir: location.topLevelDir,
+    typeDir: location.typeDir,
     kind,
     line,
     exact,
@@ -451,7 +485,7 @@ export function registerHttpRoutes(webServer: WebServerLike, deps: LegalDeps): (
             projects: projects.map(projectJson),
             incomplete: incomplete.map((item) => ({
               project: item.project,
-              topLevelDir: item.topLevelDir,
+              typeDir: item.typeDir,
             })),
           })
           return
@@ -463,8 +497,8 @@ export function registerHttpRoutes(webServer: WebServerLike, deps: LegalDeps): (
             sendJson(res, 400, { error: '缺少 project 查询参数。' })
             return
           }
-          const topLevelDir = url.searchParams.get('topLevelDir') ?? undefined
-          const location = await requireProject(deps, project, topLevelDir)
+          const typeDir = url.searchParams.get('typeDir') ?? undefined
+          const location = await requireProject(deps, project, typeDir)
           sendJson(res, 200, await readAgenda(deps, location))
           return
         }
@@ -481,14 +515,30 @@ export function registerHttpRoutes(webServer: WebServerLike, deps: LegalDeps): (
 
         if (req.method === 'POST' && path === `${HTTP_PREFIX}/settings`) {
           const body = await readJsonBody(req)
-          const value = text(body, 'dataRoot')
+          const rootDir = text(body, 'rootDir')
+          const extraTypeDirs = textList(body, 'extraTypeDirs')
+          const extraProjectDirs = textList(body, 'extraProjectDirs')
           const colors = (body as { priorityColors?: unknown }).priorityColors
-          // 两个字段都可单独保存：改颜色不必先设数据目录，反之亦然。
-          if (value === undefined && colors === undefined) {
-            throw new Error('缺少要保存的设置项（dataRoot 或 priorityColors）。')
+          // 四组字段都可单独保存：改颜色不必先设目录，改根目录不必重填另行指定的目录，反之亦然。
+          if (
+            rootDir === undefined &&
+            extraTypeDirs === undefined &&
+            extraProjectDirs === undefined &&
+            colors === undefined
+          ) {
+            throw new Error(
+              '缺少要保存的设置项（rootDir / extraTypeDirs / extraProjectDirs / priorityColors）。',
+            )
           }
           // **先落盘、后读回**：`buildSettings` 读的是当前生效值，顺序反了会把旧值回给界面。
-          if (value !== undefined) await deps.setDataRoot(value)
+          if (
+            rootDir !== undefined ||
+            extraTypeDirs !== undefined ||
+            extraProjectDirs !== undefined
+          ) {
+            // `setPaths` 只改传进来的键：缺席的键保持原值（设置层的合并没有"删除键"）。
+            await deps.setPaths({ rootDir, extraTypeDirs, extraProjectDirs })
+          }
           // 写坏的颜色在这一步被逐键兜底掉（不落盘），但**这一次的**问题要当场告诉界面，
           // 否则用户只会看到颜色"自己变回去了"却不知道为什么。
           const colorIssues =

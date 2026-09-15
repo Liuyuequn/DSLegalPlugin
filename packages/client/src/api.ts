@@ -43,13 +43,13 @@ export interface ScheduleCore {
 /** 待办 + 所属项目。 */
 export interface TodoRow extends TodoCore {
   readonly project: string
-  readonly topLevelDir: string
+  readonly typeDir: string
 }
 
 /** 日程 + 所属项目与派生状态。 */
 export interface ScheduleRow extends ScheduleCore {
   readonly project: string
-  readonly topLevelDir: string
+  readonly typeDir: string
   readonly category: string | null
   /** 派生状态：当前时刻落在有效时间区间内（由 host 统一计算，client 不自己算）。 */
   readonly ongoing: boolean
@@ -58,7 +58,7 @@ export interface ScheduleRow extends ScheduleCore {
 /** 项目汇总行。 */
 export interface ProjectRow {
   readonly project: string
-  readonly topLevelDir: string
+  readonly typeDir: string
   readonly category?: string
   readonly title?: string
   readonly categoryIssue?: string
@@ -82,12 +82,27 @@ export interface IssueRow {
   readonly message: string
 }
 
+/**
+ * 三级目录：**根目录 → 类型目录 → 项目目录**，三级可各自独立设定。
+ *
+ * 三个字段在**接口响应里可能缺席**（目录设置是后加的，旧 host 的响应里根本没有它们），
+ * 但 `getOverview` / `getSettings` / `postSettings` 一律先过 `dirFieldsOf` 把它们
+ * **降级**成 `null` / `[]`；因此拿到 `Overview` / `SettingsView` 的调用方总能按"有值"读取，
+ * 不必再判 `undefined`。
+ */
+export interface DirFields {
+  /** 根目录（绝对路径）；未设定时为 `null`。 */
+  readonly rootDir: string | null
+  /** **另行指定**的类型目录（绝对路径，可位于根目录之外）；没另设时为空数组。 */
+  readonly extraTypeDirs: readonly string[]
+  /** **另行指定**的项目目录（绝对路径，可位于根目录之外）；没另设时为空数组。 */
+  readonly extraProjectDirs: readonly string[]
+}
+
 /** 跨项目总览。 */
-export interface Overview {
-  /** 数据目录是否已设定；`false` 时其余字段为空，界面改显数据目录表单。 */
+export interface Overview extends DirFields {
+  /** 三级目录是否已设定（只设了「另行指定的项目目录」也算已配置）；`false` 时其余字段为空，界面改显目录设置表单。 */
   readonly configured: boolean
-  /** 当前数据根目录（绝对路径）；未设定时为 `null`。 */
-  readonly dataRoot: string | null
   /** host 认定的今天（`YYYY-MM-DD`）。 */
   readonly today: string
   readonly projects: readonly ProjectRow[]
@@ -115,10 +130,9 @@ export interface Overview {
   readonly colorsUnavailable?: boolean
 }
 
-/** 数据目录状态（`/dslegal/settings`）。 */
-export interface SettingsView {
+/** 目录设置状态（`/dslegal/settings`）。 */
+export interface SettingsView extends DirFields {
   readonly configured: boolean
-  readonly dataRoot: string | null
   readonly projectCount: number
   readonly incompleteCount: number
   /** 当前生效的四个颜色。 */
@@ -155,6 +169,32 @@ export const HOST_OUTDATED_COLORS =
   '插件数据接口版本过旧（未返回 priorityColors 字段）：请在重启 DSH 后刷新本页，否则自定义颜色不会生效。'
 
 /**
+ * 三级目录字段的**降级**读取。
+ *
+ * 与 `schedules`/`todos` 的处理**刻意不同**：那两处字段缺失等于"数据是错的"（会把
+ * "接口没这个字段"渲染成"今天没有安排"），而目录字段缺失在旧 host 上是**常态**，
+ * 且有一个可证明正确的兜底——"一个目录都没设"，界面照常打开、只是表单是空的。
+ * 抛错会让设置页在"页面已刷新、DSH 还没重启"的窗口期里直接打不开，代价远大于收益。
+ *
+ * 顺带挡住"字段在、但类型不对"（旧 host 或手改过的响应）：非数组一律当作空。
+ */
+function dirFieldsOf(payload: {
+  readonly rootDir?: unknown
+  readonly extraTypeDirs?: unknown
+  readonly extraProjectDirs?: unknown
+}): Required<DirFields> {
+  return {
+    rootDir: typeof payload.rootDir === 'string' ? payload.rootDir : null,
+    extraTypeDirs: Array.isArray(payload.extraTypeDirs)
+      ? (payload.extraTypeDirs as readonly string[])
+      : [],
+    extraProjectDirs: Array.isArray(payload.extraProjectDirs)
+      ? (payload.extraProjectDirs as readonly string[])
+      : [],
+  }
+}
+
+/**
  * 总览。
  *
  * 这里**校验形状**而不是盲目断言：client 产物按请求从磁盘读、刷新页面即生效，而 host
@@ -167,14 +207,15 @@ export async function getOverview(): Promise<Overview> {
   if (!Array.isArray(payload.schedules) || !Array.isArray(payload.todos)) {
     throw new Error(HOST_OUTDATED)
   }
+  const dirs = dirFieldsOf(payload)
   // 颜色字段是后加的：旧 host 不返回它。**不抛错**——内置默认色是可证明正确的兜底
   // （正是旧 host 一直在用的那一套），降级渲染 + 标记出来提示用户重启 DSH 即可；
   // 抛错会让整个面板在"页面已刷新、DSH 还没重启"的窗口期里直接不可用。
   const colors = payload.priorityColors
   if (colors === undefined || colors === null) {
-    return { ...(payload as Overview), priorityColors: { ...PRIORITY_COLORS }, colorsUnavailable: true }
+    return { ...(payload as Overview), ...dirs, priorityColors: { ...PRIORITY_COLORS }, colorsUnavailable: true }
   }
-  return payload as Overview
+  return { ...(payload as Overview), ...dirs }
 }
 
 /** 写入失败时携带 host 的错误码，供界面区分"外部已变更"与普通错误。 */
@@ -205,11 +246,26 @@ export async function postEdit(body: unknown): Promise<void> {
   throw new EditError(message, /不一致|已被修改|可能已变化/.test(message) ? 'stale' : 'other')
 }
 
-export const getSettings = (): Promise<SettingsView> => getJson<SettingsView>('/dslegal/settings')
+/** 读取目录设置与颜色（三级目录字段同样走降级读取）。 */
+export async function getSettings(): Promise<SettingsView> {
+  const payload = await getJson<Partial<SettingsView>>('/dslegal/settings')
+  return { ...(payload as SettingsView), ...dirFieldsOf(payload) }
+}
 
-/** 保存数据根目录；host 会校验目录存在并立即重新扫描。 */
+/**
+ * 保存目录设置与四象限颜色。
+ *
+ * **部分保存**：没传的键保持原值，传了才改。三件事各自独立——只改根目录不必重填
+ * 「另行指定」的两份清单，改颜色也不必先设目录。
+ *
+ * - `rootDir`：空串表示**清空**根目录（host 明确定义了这个语义，不是"非法值"）；
+ * - `extraTypeDirs` / `extraProjectDirs`：字符串数组（host 收到非数组会 400
+ *   `extraTypeDirs 必须是字符串数组。`），空数组表示"一份都没另设"。
+ */
 export async function postSettings(patch: {
-  readonly dataRoot?: string
+  readonly rootDir?: string
+  readonly extraTypeDirs?: readonly string[]
+  readonly extraProjectDirs?: readonly string[]
   readonly priorityColors?: PriorityColorOverrides
 }): Promise<SettingsView> {
   const response = await fetch('/dslegal/settings', {
@@ -229,13 +285,15 @@ export async function postSettings(patch: {
     const hint = response.status === 404 ? '（host 插件未加载该接口，请重启 DSH）' : ''
     throw new Error(payload.error ?? `保存失败：HTTP ${response.status}${hint}`)
   }
-  return payload as unknown as SettingsView
+  // 回值同样过一遍降级：旧 host 的响应里没有目录字段，调用方要能按"有值"读它。
+  const saved = payload as unknown as Partial<SettingsView>
+  return { ...(saved as SettingsView), ...dirFieldsOf(saved) }
 }
 
-export const getAgenda = (project: string, topLevelDir?: string): Promise<Agenda> =>
+export const getAgenda = (project: string, typeDir?: string): Promise<Agenda> =>
   getJson<Agenda>(
     `/dslegal/agenda?project=${encodeURIComponent(project)}${
-      topLevelDir === undefined ? '' : `&topLevelDir=${encodeURIComponent(topLevelDir)}`
+      typeDir === undefined ? '' : `&typeDir=${encodeURIComponent(typeDir)}`
     }`,
   )
 
@@ -244,7 +302,7 @@ export interface OpenSourceResult {
   /** 实际被打开的工作日志**绝对路径**——由 host 决定，界面从不传路径给它。 */
   readonly path: string
   readonly project: string
-  readonly topLevelDir: string
+  readonly typeDir: string
   readonly kind: 'todo' | 'schedule'
   readonly line: number
   /** 该行确实是一条已解析的条目；`false` 表示文件已被外部改过、行号可能不准。 */
@@ -265,11 +323,11 @@ export interface OpenSourceResult {
  * 请 host 用系统默认程序打开该条目所在的工作日志。
  *
  * **只送"哪个项目的第几行"，不送路径**：一个能打开任意文件的接口，等于把本机程序
- * 启动权交给页面里任何一段脚本。路径解析全在 host 侧（它本来就知道数据根目录）。
+ * 启动权交给页面里任何一段脚本。路径解析全在 host 侧（它本来就知道根目录）。
  */
 export async function postOpenSource(input: {
   readonly project: string
-  readonly topLevelDir?: string
+  readonly typeDir?: string
   readonly kind: 'todo' | 'schedule'
   readonly line: number
 }): Promise<OpenSourceResult> {

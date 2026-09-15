@@ -20,11 +20,32 @@ import { findProject, isAmbiguous, type ProjectLocation, type ScanResult } from 
 /** JSON 对象（工具输出与 HTTP 响应共用）。 */
 export type JsonObject = { [key: string]: JsonValue }
 
-/** 保存数据根目录后的结果。 */
-export interface DataRootUpdate {
-  /** 落盘后的绝对路径。 */
-  readonly dataRoot: string
-  /** 该目录下已就绪的项目数。 */
+/**
+ * 当前生效的三级目录。
+ *
+ * 三级**各自独立**：任意一级都可以单独设定，也可以同时设定。`rootDir` 未设定时为 `null`，
+ * 此时只要另有"另行指定的类型目录 / 项目目录"，插件照常工作。
+ */
+export interface ResolvedPaths {
+  /** 根目录绝对路径；`null` = 未设定。 */
+  readonly rootDir: string | null
+  /** 另行指定的类型目录（绝对路径）。 */
+  readonly extraTypeDirs: readonly string[]
+  /** 另行指定的项目目录（绝对路径）。 */
+  readonly extraProjectDirs: readonly string[]
+}
+
+/** 只改其中一部分：缺席的键保持原值。 */
+export interface PathsPatch {
+  /** 根目录；`null` 或空串表示清空。 */
+  readonly rootDir?: string | null
+  readonly extraTypeDirs?: readonly string[]
+  readonly extraProjectDirs?: readonly string[]
+}
+
+/** 保存目录设置后的结果。 */
+export interface PathsUpdate extends ResolvedPaths {
+  /** 当前设置下已就绪的项目数。 */
   readonly projectCount: number
   /** 结构不完整的项目目录数。 */
   readonly incompleteCount: number
@@ -38,31 +59,38 @@ export interface PriorityColorsUpdate {
   readonly issues: readonly PriorityColorIssue[]
 }
 
+/** 三级目录是否至少设定了其中之一。 */
+export function isConfigured(paths: ResolvedPaths): boolean {
+  return (
+    paths.rootDir !== null || paths.extraTypeDirs.length > 0 || paths.extraProjectDirs.length > 0
+  )
+}
+
 /** 领域操作的依赖。 */
 export interface LegalDeps {
   /**
-   * 扫描数据根目录。
+   * 扫描三级目录。
    *
    * `force` 为真时忽略缓存、直接读磁盘：**显式读取**（界面刷新、列出项目、定位写入目标）
    * 必须走这条路，否则用户在工作日志之外新建/改名/删除案件目录后，界面与工具会一直看到
    * 旧结果——文件是唯一真相，缓存不能变成第二个真相。`false`/省略则允许复用缓存
    * （供同一轮里反复调用的 agent 工具使用）。
    *
-   * 未设定数据目录时抛出可读错误。
+   * 三级目录一个都没设定时抛出可读错误。
    */
   readonly scan: (force?: boolean) => Promise<ScanResult>
   readonly readWorkLog: (path: string) => Promise<WorkLogSnapshot>
   readonly writeWorkLog: (path: string, text: string) => Promise<void>
   /** 通知监听器"这是本插件自己写的"，抑制回环事件。 */
   readonly markSelfWrite: (path: string) => void
-  /** 当前数据根目录；`null` 表示尚未设定。 */
-  readonly getDataRoot: () => string | null
-  /** 校验并保存数据根目录（写入用户设置），随即生效并重新扫描。 */
-  readonly setDataRoot: (input: string) => Promise<DataRootUpdate>
+  /** 当前生效的三级目录。 */
+  readonly getPaths: () => ResolvedPaths
+  /** 校验并保存目录设置（写入用户设置），随即生效并重新扫描。 */
+  readonly setPaths: (patch: PathsPatch) => Promise<PathsUpdate>
   /**
    * 当前生效的四个优先级颜色（已合过默认值，**一定有值**）+ 被兜底掉的键。
    *
-   * 与数据目录走同一份用户设置；设置服务缺席时退回默认色。
+   * 与目录设置走同一份用户设置；设置服务缺席时退回默认色。
    * 一次返回两者，是因为界面既要拿颜色渲染、也要拿到"哪一格没生效"去如实提示。
    */
   readonly getPriorityColors: () => ResolvedPriorityColors
@@ -81,14 +109,14 @@ export interface LegalDeps {
 export async function requireProject(
   deps: LegalDeps,
   project: string,
-  topLevelDir?: string,
+  typeDir?: string,
 ): Promise<ProjectLocation> {
   // 强制重扫：刚新建的案件目录必须立刻可写，不能等下一次文件变更或重启。
   const { projects } = await deps.scan(true)
-  const found = findProject(projects, project, topLevelDir)
+  const found = findProject(projects, project, typeDir)
   if (found !== undefined) return found
   if (isAmbiguous(projects, project)) {
-    throw new Error(`项目「${project}」在多个顶级目录中重名，请同时提供 topLevelDir。`)
+    throw new Error(`项目「${project}」在多个类型目录中重名，请同时提供 typeDir。`)
   }
   throw new Error(`未找到项目「${project}」；请先查看可用项目。`)
 }
@@ -173,7 +201,7 @@ export function issuesJson(snapshot: WorkLogSnapshot): { [key: string]: JsonValu
 /** 项目 + 工作日志 → 界面/模型可用的聚合视图。 */
 export interface AgendaView {
   readonly project: string
-  readonly topLevelDir: string
+  readonly typeDir: string
   readonly category: string | null
   readonly title: string | null
   readonly categoryIssue: string | null
@@ -184,14 +212,11 @@ export interface AgendaView {
 }
 
 /** 读取一个项目的待办与日程。 */
-export async function readAgenda(
-  deps: LegalDeps,
-  location: ProjectLocation,
-): Promise<AgendaView> {
+export async function readAgenda(deps: LegalDeps, location: ProjectLocation): Promise<AgendaView> {
   const snapshot = await deps.readWorkLog(location.workLogPath)
   return {
     project: location.project,
-    topLevelDir: location.topLevelDir,
+    typeDir: location.typeDir,
     category: location.category,
     title: location.title,
     categoryIssue: location.categoryIssue,
